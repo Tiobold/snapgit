@@ -21,14 +21,29 @@ def fetch():
             print("downloading", f)
             urllib.request.urlretrieve(BASE + f, p)
 
+# The phonemizer mangles spelled-out letters ("A I" -> "uh eye", "ay eye" -> "eye eye"), so acronyms are
+# spliced in as explicit IPA letter names: A = "ay", I = "eye", C = "see", P = "pee"...
+LETTERS = {"A": "ˈeɪ", "I": "ˈaɪ", "C": "sˈiː", "P": "pˈiː", "L": "ˈɛl", "G": "dʒˈiː", "T": "tˈiː", "M": "ˈɛm"}
+ACRONYM = re.compile(r"\b((?:[ACIPLGTM] )+[ACIPLGTM])\b('s)?")
+
 def speakable(text):
-    """Spell out what the voice gets wrong. Narration in scenes.json stays readable; this is only for the ear."""
-    text = re.sub(r"\bA P I\b", "ay pee eye", text)
-    text = re.sub(r"\bA I\b", "ay eye", text)
-    text = re.sub(r"\bC I\b", "see eye", text)
-    text = re.sub(r"\bL G T M\b", "el gee tee em", text)
-    text = re.sub(r"\bsnapgit\b", "snap git", text, flags=re.I)
-    return text
+    """Scene text for the ear: the brand name is two words."""
+    return re.sub(r"\bsnapgit\b", "snap git", text, flags=re.I)
+
+def to_phonemes(k, text):
+    """Phonemize normally, but speak acronyms as letter names. Possessive 's becomes a plain z."""
+    out, pos = [], 0
+    for m in ACRONYM.finditer(text):
+        before = text[pos:m.start()].strip()
+        if before:
+            out.append(k.tokenizer.phonemize(speakable(before), "en-us"))
+        letters = " ".join(LETTERS[c] for c in m.group(1).split())
+        out.append(letters + ("z" if m.group(2) else ""))
+        pos = m.end()
+    rest = text[pos:].strip()
+    if rest:
+        out.append(k.tokenizer.phonemize(speakable(rest), "en-us"))
+    return " ".join(out)
 
 PAUSE = re.compile(r"\[pause ([0-9.]+)\]")
 
@@ -41,7 +56,7 @@ def synth(k, text, voice, speed):
         if i % 2 == 1:
             parts.append(np.zeros(int(float(piece) * sr), dtype="float32"))
         elif piece.strip():
-            samples, sr = k.create(speakable(piece.strip()), voice=voice, speed=speed, lang="en-us")
+            samples, sr = k.create(to_phonemes(k, piece.strip()), voice=voice, speed=speed, lang="en-us", is_phonemes=True)
             parts.append(samples)
     return np.concatenate(parts), sr
 
