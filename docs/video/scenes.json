@@ -63,38 +63,45 @@
   {
     "id": "scene07",
     "kind": "terminal",
-    "title": "View-once pull requests",
-    "code": "$ snapgit pr send -m \"Fix login\" -r origin\n📨 sent \"Fix login\" (fix/login -> main)\n   id 6e844516, view once, expires 2026-10-11 18:03Z\n   recipient: snapgit pr open 6e844516 -r origin\n$ snapgit pr open 6e844516\nFix login   #6e844516, view once\n  09bdb02 fix login\n+export const login = () => \"ok\";\n💥 this PR has self-destructed. You will not see it again.",
-    "narration": "Pull requests that open exactly once. The recipient reads it, and it burns on the remote before they see a single line."
+    "title": "Pull requests with one button",
+    "code": "$ snapgit pr send fix/login -m \"Fix login\" -r origin\n📨 sent \"Fix login\" (fix/login -> main)\n   id 95962cb1, readable once. Unless rejected, it merges into main at 2026-10-11 18:15Z\n   recipient: snapgit pr open 95962cb1 -r origin   (or snapgit pr reject 95962cb1 -r origin)\n$ snapgit pr open 95962cb1\nFix login   #95962cb1, read once\n  78a8ca1 fix login\n+export const login = () => \"ok\";\n💥 the contents just self-destructed. You will not see them again.\n⏳ the PR is still live: it merges into main at 2026-10-11 18:15Z unless you run: snapgit pr reject 95962cb1",
+    "narration": "Pull requests, with exactly one button. Send one, and the branch goes on the clock. The recipient can read it once, and then the contents burn. The pull request itself stays alive."
   },
   {
     "id": "scene08",
     "kind": "terminal",
-    "title": "Gone. Read receipts included.",
-    "code": "$ snapgit pr open 6e844516\nsnapgit: PR 6e844516 is gone (burned, expired, or never existed)\n\n$ snapgit pr receipts\n👀 Alice <alice@example.com> opened \"Fix login\" (#6e844516) at 2026-10-10 18:03Z\nreceipts shown once, now deleted",
-    "narration": "Try to open it again, and it's gone. If two people race, only one wins. And of course there are read receipts: you find out who opened your PR, and whether they took a screenshot."
+    "title": "The button is reject",
+    "code": "$ snapgit pr reject b85ca565 -m 'no'\n🚫 rejected. It will not be merged (the sender hears about it when their branch expires)\n\n$ snapgit pr receipts\n👀 Alice <alice@example.com> opened \"Fix login\" (#95962cb1) at 2026-10-10 18:15Z\nreceipts shown once, now deleted",
+    "narration": "The button is reject. No approve. No L G T M. No changes requested. And you still get a read receipt, so you know who looked."
   },
   {
     "id": "scene09",
     "kind": "terminal",
-    "title": "Streaks. Stories.",
-    "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   09bdb02  fix login  (origin/fix/login)\n   d1c3543  init  (origin/main, main)\n   🔥 1 day streak\n   (this story will not be saved)",
-    "narration": "Then your streak, and your story: your last day in git, which will not be saved."
+    "title": "Merge by neglect",
+    "code": "(a day later)\n$ snapgit sweep --remote origin\n🔀 PR 95962cb1: nobody rejected it, so fix/login merged into main and was pushed\n👻 ghosted fix/login (was 78a8ca1, remote too). Undo: git branch fix/login 78a8ca1\n🚫 PR b85ca565 rejected by Bob <bob@example.com>: \"no\". Nothing merged\n👻 ghosted rewrite-in-rust (was 732f08a, remote too). Undo: git branch rewrite-in-rust 732f08a\n$ git log --oneline --graph -4\n*   ecde4d3 Merge fix/login into main\n|\\  \n| * 78a8ca1 fix login\n|/  \n* b4f7492 init",
+    "narration": "And if nobody rejects it? When the branch self destructs, it merges. Merge by neglect. A rejected one dies with its branch, and nothing lands."
   },
   {
     "id": "scene10",
-    "kind": "bullets",
-    "title": "Under the hood, it's just git",
-    "items": [
-      "PRs are blobs in refs/snapgit, burned with one atomic push --delete",
-      "Timers live in your git config; hooks sweep for you",
-      "Zero dependencies. Node 20 and git",
-      "No servers, so there is nothing to take down"
-    ],
-    "narration": "Under the hood, it's just git. Pull requests are blobs in a private ref, burned with one atomic delete. Timers live in your git config. Zero dependencies, and no servers, so there is nothing for us to take down."
+    "kind": "terminal",
+    "title": "Streaks. Stories.",
+    "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   ecde4d3  Merge fix/login into main  (origin/main)\n   b4f7492  init  (no branch tip)\n   78a8ca1  fix login  (no branch tip)\n   🔥 1 day streak\n   (this story will not be saved)",
+    "narration": "Then your streak, and your story: your last day in git, which will not be saved."
   },
   {
     "id": "scene11",
+    "kind": "bullets",
+    "title": "Under the hood, it's just git",
+    "items": [
+      "Opening a PR claims a receipt ref with a create-only push, so only one reader wins",
+      "The deadline is the branch timer; expiry merges with plain git",
+      "Timers live in your git config; hooks sweep for you",
+      "No servers, so there is nothing to take down"
+    ],
+    "narration": "Under the hood, it's just git. The first reader claims the pull request with an atomic push, so only one person ever sees the contents. The deadline is the branch timer, and expiry merges with plain git. Timers live in your git config. Zero dependencies, and no servers, so there is nothing for us to take down."
+  },
+  {
+    "id": "scene12",
     "kind": "twocol",
     "title": "Downtime, compared",
     "colA_title": "GitHub",
@@ -104,7 +111,7 @@
     "narration": "The difference? GitHub disappears unexpectedly. snapgit disappears on purpose, on a schedule you chose."
   },
   {
-    "id": "scene12",
+    "id": "scene13",
     "kind": "outro",
     "title": "",
     "subtitle": "Try snapgit",
@@ -117,7 +124,7 @@
     "narration": "Try snapgit. Clone it, link it, and start a branch with a timer. It's hosted on GitHub. We know."
   },
   {
-    "id": "scene13",
+    "id": "scene14",
     "kind": "sources",
     "title": "Sources",
     "items": [

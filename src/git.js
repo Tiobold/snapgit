@@ -6,7 +6,7 @@ export class GitError extends Error {}
 export function run(args, { cwd = process.cwd(), input } = {}) {
   const r = spawnSync('git', args, { cwd, input, encoding: 'utf8', maxBuffer: 1 << 30 });
   if (r.error) throw r.error;
-  return { ok: r.status === 0, out: r.stdout, err: r.stderr.trim() };
+  return { ok: r.status === 0, status: r.status, out: r.stdout, err: r.stderr.trim() };
 }
 
 /** Run git and return stdout (right-trimmed); throw GitError on failure. */

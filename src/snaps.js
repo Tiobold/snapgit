@@ -50,7 +50,7 @@ export function createSnap(name, { ttlMs, from, stay = false, cwd }) {
  * Delete every expired snap branch. Never touches a branch that is checked out.
  * Returns { ghosted: [{ name, sha, remote }], skipped: [{ name, reason }] }.
  */
-export function sweep({ cwd, remote = null, dryRun = false }) {
+export function sweep({ cwd, remote = null, dryRun = false, resolve = () => ({ action: 'none' }) }) {
   const ghosted = [];
   const skipped = [];
   const here = currentBranch(cwd);
@@ -62,13 +62,20 @@ export function sweep({ cwd, remote = null, dryRun = false }) {
       skipped.push({ name: snap.name, reason: 'protected' });
       continue;
     }
-    if (snap.name === here) {
-      skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
-      continue;
-    }
     const sha = git(['rev-parse', '--short', `refs/heads/${snap.name}`], { cwd });
     if (dryRun) {
       ghosted.push({ name: snap.name, sha, remote: false });
+      continue;
+    }
+    const pr = resolve(snap.name);
+    if (snap.name === here && pr.action !== 'hold') {
+      // The branch you're standing on survives until you leave, but its PR is settled now.
+      if (pr.action !== 'none') ghosted.push({ name: snap.name, sha, pr, stayed: true });
+      else skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
+      continue;
+    }
+    if (pr.action === 'hold') {
+      skipped.push({ name: snap.name, reason: `PR ${pr.id} held: ${pr.reason}` });
       continue;
     }
     const del = run(['branch', '-D', snap.name], { cwd });
@@ -81,7 +88,7 @@ export function sweep({ cwd, remote = null, dryRun = false }) {
     if (remote && run(['ls-remote', '--exit-code', '--heads', remote, snap.name], { cwd }).ok) {
       remoteGone = run(['push', remote, '--delete', snap.name], { cwd }).ok;
     }
-    ghosted.push({ name: snap.name, sha, remote: remoteGone });
+    ghosted.push({ name: snap.name, sha, remote: remoteGone, pr });
   }
   return { ghosted, skipped };
 }

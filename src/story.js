@@ -16,7 +16,7 @@ export function story(cwd, windowMs) {
   return {
     commits,
     snaps: listSnaps(cwd).filter((b) => b.expiresAt > now()),
-    prs: listLocalPrs(cwd).filter((p) => p.expiresAt > now()),
+    prs: listLocalPrs(cwd),
     streak: streak(cwd),
   };
 }

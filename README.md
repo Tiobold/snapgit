@@ -22,28 +22,39 @@ git hooks `snapgit init` installs and every time you run `snapgit ls`. Rules: pr
 develop, the origin default) can't get a timer, and a checked-out branch is never deleted, it just waits for you to leave.
 Ghosting prints the old tip so `git branch <name> <sha>` brings it back (until git gc).
 
-## View-once pull requests
+## Pull requests with one button
 
 ```
-snapgit pr send -m "Add feature\nlook at this" -r origin    # freeze head...base diff, push as refs/snapgit/pr/<id>
-snapgit pr open <id> -r origin                              # read it once; it is deleted as you open it
-snapgit pr ls -r origin                                     # unopened PRs
-snapgit pr burn <id> -r origin                              # retract without reading
+snapgit pr send feat -m "Add feature\nlook at this" -r origin   # ask for a merge; puts the branch on the clock
+snapgit pr open <id> -r origin                                  # read it once; the contents then burn
+snapgit pr reject <id> -m "no" -r origin                        # the only button there is
+snapgit pr ls -r origin                                         # live PRs
+snapgit pr burn <id> -r origin                                  # sender withdraws it (nothing merges)
 ```
 
-A PR is a JSON blob (message, commits, stat, full patch) in a private ref, so any git remote can carry it. Opening
-deletes the ref on the remote *before* showing you anything. `git push --delete` succeeds for exactly one person, so if
-two people race, one gets the PR and the other gets "already burned". The sender's own copy dies with it. PRs also expire
-unopened (default 24h). Piping the output (a screenshot, in spirit) is refused without burning, unless you pass
-`--screenshot`, which opens it anyway and records that you took one.
+There is no approve. A PR can only be rejected, and **if nobody rejects it before its branch expires, it merges into the
+base branch** when the branch self-destructs. Its deadline *is* the branch timer (`snapgit extend` moves both; `snapgit keep`
+refuses while a PR is live). The sender's `sweep` does the merge, then deletes the branch.
 
-Honest caveat: burning removes the ref, not the bytes. The blob lingers as an unreachable object until git gc prunes it.
+How the merge happens: with the base branch not checked out it is a plumbing merge (`merge-tree` + `commit-tree`), so no
+working tree is touched. With the base checked out it is a normal `git merge --no-ff`, but only if the tree is clean. Conflicts,
+a dirty base, or a remote that can't be reached to check for a rejection all **hold** the merge: nothing merges and the branch
+is *not* deleted, and every sweep says why. A rejection counts only if it was made before the deadline. The hooks `snapgit init`
+installs merge locally; add `--remote` (`snapgit sweep --remote origin`) to also push the merged base and delete the remote branch.
+
+Reading is once-only. A PR is a JSON blob under `refs/snapgit/pr/<id>`. The first reader claims a receipt ref with a create-only
+push (only one racer succeeds), and the PR is rewritten without its message, commits and patch. The PR itself stays alive so it can
+still be rejected or merged. Recipients keep no local copy. Piping the output (a screenshot, in spirit) is refused without reading,
+unless you pass `--screenshot`, which opens it anyway and records that you took one.
+
+Honest caveat: burning replaces the ref, not the bytes. Old blobs linger as unreachable objects until git gc prunes them, and
+anyone with the sender's repo can still read the original.
 
 ## Read receipts
 
 Opening a PR also writes a receipt (`refs/snapgit/receipt/<id>`) saying who opened it, when, and whether they screenshotted.
 `snapgit pr receipts` shows the receipts for PRs you sent, then deletes them. Receipts addressed to other people are never
-shown or deleted by you. Opening a PR you sent yourself clears your stale local copy once its receipt arrives.
+shown or deleted by you. Collecting a receipt also refreshes your local copy of the PR to its burned version.
 
 ## Streaks and stories
 
@@ -57,7 +68,7 @@ overrides the clock for time travel.
 
 ## The video
 
-`docs/video/snapgit.mp4` is a two-minute pitch built from `docs/video/scenes.json` with the same pipeline as the
+`docs/video/snapgit.mp4` is a two-and-a-half-minute pitch built from `docs/video/scenes.json` with the same pipeline as the
 SecondBrainClaude walkthrough: HTML slides, headless Chromium screenshots, offline Kokoro narration, ffmpeg.
 The terminal slides are real captured output. Rebuild with
 `PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run downloads
