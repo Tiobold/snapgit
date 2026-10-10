@@ -107,7 +107,7 @@ sandbox. It talks only to the GitHub API, so there is nothing to run. See `web/R
 
 ## The video
 
-`docs/video/snapgit-tiktok.mp4` is an 86 second 1080x1920 pitch (over a minute, which TikTok's creator monetization needs): leadership wants more AI, review is the bottleneck, GitHub keeps going down, snapgit's answer. Narration is Kokoro `am_michael` at 1.12x with compression and loudness normalisation (`VOICE=` and `SPEED=` override) for TikTok, built from `docs/video/scenes.json`: HTML slides,
+`docs/video/snapgit-tiktok.mp4` is a 90 second 1080x1920 pitch (over a minute, which TikTok's creator monetization needs): leadership wants more AI, review is the bottleneck, GitHub keeps going down, snapgit's answer. Narration is Kokoro `am_michael` at 1.12x with compression and loudness normalisation (`VOICE=` and `SPEED=` override) for TikTok, built from `docs/video/scenes.json`: HTML slides,
 headless Chromium screenshots, offline Kokoro narration, ffmpeg. The terminal slides are real captured output. Rebuild with
 `PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run
 downloads ~350 MB of voice models). Caption and hashtags: `docs/video/tiktok-caption.txt`. The outage figures come from

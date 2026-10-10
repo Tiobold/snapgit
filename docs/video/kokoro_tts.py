@@ -22,12 +22,28 @@ def fetch():
             urllib.request.urlretrieve(BASE + f, p)
 
 def speakable(text):
-    # scenes.json spells things out for the old Festival voice; undo that.
-    text = re.sub(r"obsidian dash M C P dash server", "obsidian-mcp-server", text)
-    text = re.sub(r"M C P dash obsidian", "MCP obsidian", text)
-    text = text.replace("M C P", "MCP")
-    text = text.replace("setup-vault dot s h", "setup-vault.sh")
+    """Spell out what the voice gets wrong. Narration in scenes.json stays readable; this is only for the ear."""
+    text = re.sub(r"\bA P I\b", "ay pee eye", text)
+    text = re.sub(r"\bA I\b", "ay eye", text)
+    text = re.sub(r"\bC I\b", "see eye", text)
+    text = re.sub(r"\bL G T M\b", "el gee tee em", text)
+    text = re.sub(r"\bsnapgit\b", "snap git", text, flags=re.I)
     return text
+
+PAUSE = re.compile(r"\[pause ([0-9.]+)\]")
+
+def synth(k, text, voice, speed):
+    """Narration may contain [pause 1.2] markers: synthesise each part and put real silence between them."""
+    import numpy as np
+    parts, sr = [], 24000
+    pieces = PAUSE.split(text)  # text, secs, text, secs, ...
+    for i, piece in enumerate(pieces):
+        if i % 2 == 1:
+            parts.append(np.zeros(int(float(piece) * sr), dtype="float32"))
+        elif piece.strip():
+            samples, sr = k.create(speakable(piece.strip()), voice=voice, speed=speed, lang="en-us")
+            parts.append(samples)
+    return np.concatenate(parts), sr
 
 def main():
     scenes_path, out_dir = sys.argv[1], sys.argv[2]
@@ -37,7 +53,7 @@ def main():
     k = Kokoro(os.path.join(MODELS, FILES[0]), os.path.join(MODELS, FILES[1]))
     os.makedirs(out_dir, exist_ok=True)
     for s in json.load(open(scenes_path)):
-        samples, sr = k.create(speakable(s["narration"]), voice=voice, speed=speed, lang="en-us")
+        samples, sr = synth(k, s["narration"], voice, speed)
         out = os.path.join(out_dir, s["id"] + ".wav")
         sf.write(out, samples, sr)
         print("generated", out, f"[kokoro:{voice}]")
