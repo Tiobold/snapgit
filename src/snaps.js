@@ -48,16 +48,18 @@ export function createSnap(name, { ttlMs, from, stay = false, cwd }) {
 
 /**
  * Delete every expired snap branch. Never touches a branch that is checked out.
- * Returns { ghosted: [{ name, sha, remote }], skipped: [{ name, reason }] }.
+ * `settle` runs first and settles due PRs. Returns { ghosted, skipped, events }.
  */
-export function sweep({ cwd, remote = null, dryRun = false, resolve = () => ({ action: 'none' }) }) {
+export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ events: [], merged: new Set(), held: new Map() }) }) {
   const ghosted = [];
   const skipped = [];
   const here = currentBranch(cwd);
   const safe = protectedBranches(cwd);
   const t = now();
+  const settled = dryRun ? { events: [], merged: new Set(), held: new Map() } : settle();
   for (const snap of listSnaps(cwd)) {
-    if (snap.expiresAt > t) continue;
+    const mergedNow = settled.merged.has(snap.name);
+    if (snap.expiresAt > t && !mergedNow) continue;
     if (safe.has(snap.name)) {
       skipped.push({ name: snap.name, reason: 'protected' });
       continue;
@@ -67,15 +69,13 @@ export function sweep({ cwd, remote = null, dryRun = false, resolve = () => ({ a
       ghosted.push({ name: snap.name, sha, remote: false });
       continue;
     }
-    const pr = resolve(snap.name);
-    if (snap.name === here && pr.action !== 'hold') {
-      // The branch you're standing on survives until you leave, but its PR is settled now.
-      if (pr.action !== 'none') ghosted.push({ name: snap.name, sha, pr, stayed: true });
-      else skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
+    if (settled.held.has(snap.name)) {
+      skipped.push({ name: snap.name, reason: `PR held: ${settled.held.get(snap.name)}` });
       continue;
     }
-    if (pr.action === 'hold') {
-      skipped.push({ name: snap.name, reason: `PR ${pr.id} held: ${pr.reason}` });
+    if (snap.name === here) {
+      if (mergedNow) setExpiry(snap.name, t, cwd); // vanish at the next sweep after you leave
+      skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
       continue;
     }
     const del = run(['branch', '-D', snap.name], { cwd });
@@ -88,7 +88,7 @@ export function sweep({ cwd, remote = null, dryRun = false, resolve = () => ({ a
     if (remote && run(['ls-remote', '--exit-code', '--heads', remote, snap.name], { cwd }).ok) {
       remoteGone = run(['push', remote, '--delete', snap.name], { cwd }).ok;
     }
-    ghosted.push({ name: snap.name, sha, remote: remoteGone, pr });
+    ghosted.push({ name: snap.name, sha, remote: remoteGone });
   }
-  return { ghosted, skipped };
+  return { ghosted, skipped, events: settled.events };
 }

@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { hasRemote, run } from './git.js';
 import { parseDuration, formatDuration, now } from './time.js';
 import { createSnap, listSnaps, setExpiry, getExpiry, clearExpiry, sweep } from './snaps.js';
-import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, resolveBranchPr, retimePr, prForBranch, deadline } from './pr.js';
+import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, retimePr, prForBranch, fuseMs } from './pr.js';
 import { streak } from './streak.js';
 import { story } from './story.js';
 import { installHooks } from './hooks.js';
@@ -13,7 +13,8 @@ const HELP = `snapgit: git, but it disappears
   snapgit ls                                                  branches on the clock
   snapgit extend <branch> <duration>                          buy more time (e.g. 12h)
   snapgit keep <branch>                                       save to memories (remove the timer)
-  snapgit sweep [--remote origin] [--dry-run] [--quiet]       delete expired branches and PRs
+  snapgit sweep [--remote origin] [--dry-run] [--quiet]       delete expired branches, merge due PRs
+  snapgit watch [--remote origin] [--every 5s]                keep sweeping, so fuses burn on time
   snapgit init                                                install hooks so sweeping is automatic
 
   snapgit pr send [branch] [--base main] [-m "title\\nbody"] [--ttl 24h] [--remote origin]
@@ -53,19 +54,19 @@ const args = (argv, options, positionals = true) =>
 
 const TTL = { ttl: { type: 'string', short: 't' } };
 
-function printSweep({ ghosted, skipped }, quiet, dryRun) {
-  for (const g of ghosted) {
-    const pr = g.pr;
-    if (pr?.action === 'merged') {
-      out(`🔀 PR ${pr.id}: nobody rejected it, so ${g.name} merged into ${pr.base}${pr.late ? ' (a rejection arrived too late)' : ''}${pr.pushed ? ' and was pushed' : ''}`);
-    } else if (pr?.action === 'rejected') {
-      out(`🚫 PR ${pr.id} rejected by ${pr.by}${pr.reason ? `: "${pr.reason}"` : ''}. Nothing merged`);
+function printSweep({ ghosted, skipped, events }, quiet, dryRun) {
+  for (const e of events) {
+    if (e.action === 'merged') {
+      out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}`);
+    } else if (e.action === 'rejected') {
+      out(`🚫 PR ${e.id} rejected by ${e.by}${e.reason ? `: "${e.reason}"` : ''}. Nothing merged`);
     }
-    if (g.stayed) out(`   ${g.name} is checked out, so the branch itself will vanish once you leave`);
-    else out(`👻 ${dryRun ? 'would ghost' : 'ghosted'} ${g.name} (was ${g.sha}${g.remote ? ', remote too' : ''}). Undo: git branch ${g.name} ${g.sha}`);
+  }
+  for (const g of ghosted) {
+    out(`👻 ${dryRun ? 'would ghost' : 'ghosted'} ${g.name} (was ${g.sha}${g.remote ? ', remote too' : ''}). Undo: git branch ${g.name} ${g.sha}`);
   }
   if (!quiet) for (const s of skipped) out(`   kept ${s.name}: ${s.reason}`);
-  if (!quiet && !ghosted.length && !skipped.length) out('nothing has expired');
+  if (!quiet && !ghosted.length && !skipped.length && !events.length) out('nothing has expired');
 }
 
 const prForBranchId = (id, cwd) => listLocalPrs(cwd).some((r) => r.id === id);
@@ -116,12 +117,23 @@ const COMMANDS = {
       remote: { type: 'string', short: 'r' },
       'dry-run': { type: 'boolean' },
       quiet: { type: 'boolean', short: 'q' },
+      offline: { type: 'boolean' },
     }, false);
     const dryRun = values['dry-run'];
-    const result = sweep({ cwd, remote: values.remote, dryRun, resolve: (b) => resolveBranchPr(b, { cwd, push: !!values.remote }) });
+    const result = sweep({ cwd, remote: values.remote, dryRun, settle: () => settlePrs({ cwd, push: !!values.remote, offline: values.offline }) });
     printSweep(result, values.quiet, dryRun);
     if (!dryRun) {
       for (const id of sweepPrs(cwd)) out(`💨 PR ${id} dropped: its branch is gone, nothing to merge`);
+    }
+  },
+
+  async watch(argv, cwd) {
+    const { values } = args(argv, { remote: { type: 'string', short: 'r' }, every: { type: 'string' } }, false);
+    const everyMs = parseDuration(values.every ?? '5s');
+    out(`👀 watching every ${formatDuration(everyMs)}${values.remote ? ` (remote ${values.remote})` : ''}. Ctrl-C to stop`);
+    for (;;) {
+      printSweep(sweep({ cwd, remote: values.remote, settle: () => settlePrs({ cwd, push: !!values.remote }) }), true, false);
+      await new Promise((r) => setTimeout(r, everyMs));
     }
   },
 
@@ -138,7 +150,11 @@ const COMMANDS = {
     if (!s.commits.length && !s.snaps.length && !s.prs.length) return out('   nothing. Quiet day. It would have disappeared anyway.');
     for (const c of s.commits) out(`   ${c.sha}  ${c.subject}  ${paint(2, `(${c.refs})`)}`);
     for (const b of s.snaps) out(`   ⏳ ${b.name} vanishes in ${formatDuration(b.expiresAt - now())}`);
-    for (const p of s.prs) out(`   📨 PR ${p.id} "${p.title}" merges into ${p.base} in ${formatDuration(p.expiresAt - now())} unless rejected`);
+    for (const p of s.prs) {
+      const rc = receiptFor(p.id, cwd);
+      const due = Math.min(p.expiresAt, rc ? rc.openedAt + fuseMs() : Infinity);
+      out(`   📨 PR ${p.id} "${p.title}" merges into ${p.base} in ${formatDuration(due - now())} unless rejected`);
+    }
     out(`   🔥 ${s.streak.current} day streak`);
     out('   (this story will not be saved)');
   },
@@ -158,7 +174,7 @@ const COMMANDS = {
       if (remote && !hasRemote(remote, cwd)) throw new Error(`no remote named ${remote}`);
       const rec = createPr({ cwd, head: positionals[0], base: values.base, message: values.message, ttlMs: parseDuration(values.ttl ?? '24h'), remote });
       out(`📨 sent "${rec.title}" (${rec.head} -> ${rec.base})`);
-      out(`   id ${rec.id}, readable once. Unless rejected, it merges into ${rec.base} at ${when(rec.expiresAt)}`);
+      out(`   id ${rec.id}, 60 seconds after it is first opened (or at ${when(rec.expiresAt)}), it merges into ${rec.base} unless rejected`);
       out(remote ? `   recipient: snapgit pr open ${rec.id} -r ${remote}   (or snapgit pr reject ${rec.id} -r ${remote})` : `   not pushed anywhere yet; use --remote <name> to deliver it`);
       return;
     }
@@ -170,8 +186,8 @@ const COMMANDS = {
         throw new Error('stdout is not a terminal, which looks suspiciously like a screenshot. Nothing was burned. Pass --screenshot if you insist');
       }
       const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
-      const { record } = openPr(positionals[0], { cwd, remote, screenshot });
-      render(record, screenshot);
+      const { record, receipt, mergesAt } = openPr(positionals[0], { cwd, remote, screenshot });
+      render(record, receipt, mergesAt, screenshot);
       return;
     }
     if (sub === 'reject') {
@@ -179,15 +195,17 @@ const COMMANDS = {
       if (positionals.length !== 1) throw new Error('usage: snapgit pr reject <id> [-m reason]');
       const remote = values.remote ?? (hasRemote('origin', cwd) && !prForBranchId(positionals[0], cwd) ? 'origin' : undefined);
       rejectPr(positionals[0], { cwd, remote, reason: values.message });
-      out('🚫 rejected. It will not be merged (the sender hears about it when their branch expires)');
+      out('🚫 rejected. It will not be merged');
       return;
     }
     if (sub === 'ls') {
       const { values } = args(rest, remoteOpt, false);
       const local = listLocalPrs(cwd);
       for (const r of local) {
-        const left = r.expiresAt - now();
-        out(`${r.id}  ${r.title}  (${r.head} -> ${r.base}, ${r.state}, ${left > 0 ? `merges in ${formatDuration(left)}` : 'merging at next sweep'} unless rejected)`);
+        const rc = receiptFor(r.id, cwd);
+        const due = Math.min(r.expiresAt, rc ? rc.openedAt + fuseMs() : Infinity);
+        const left = due - now();
+        out(`${r.id}  ${r.title}  (${r.head} -> ${r.base}, ${rc ? `opened by ${rc.opener}` : 'unopened'}, ${left > 0 ? `merges in ${formatDuration(left)}` : 'merging at next sweep'} unless rejected)`);
       }
       if (values.remote) {
         const seen = new Set(local.map((r) => r.id));
@@ -203,7 +221,6 @@ const COMMANDS = {
       for (const r of receipts) {
         out(`👀 ${r.opener} opened "${r.title}" (#${r.id}) at ${when(r.openedAt)}${r.screenshot ? ' 📸 and took a screenshot' : ''}`);
       }
-      out('receipts shown once, now deleted');
       return;
     }
     if (sub === 'burn') {
@@ -218,14 +235,14 @@ const COMMANDS = {
 };
 
 function sweepQuiet(cwd) {
-  printSweep(sweep({ cwd, resolve: (b) => resolveBranchPr(b, { cwd }) }), true, false);
+  printSweep(sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) }), true, false);
   sweepPrs(cwd);
 }
 
-function render(r, screenshot) {
+function render(r, receipt, mergesAt, screenshot) {
   const bar = '━'.repeat(60);
   out(paint(35, bar));
-  out(`${paint(1, r.title)}   ${paint(2, `#${r.id}, read once`)}`);
+  out(`${paint(1, r.title)}   ${paint(2, `#${r.id}`)}`);
   out(`${r.author}  ·  ${r.head} -> ${r.base}  ·  sent ${when(r.createdAt)}`);
   if (r.message) out(`\n${r.message}`);
   if (r.commits.length) out(`\n${r.commits.map((c) => '  ' + c).join('\n')}`);
@@ -234,7 +251,7 @@ function render(r, screenshot) {
     out(line.startsWith('+') && !line.startsWith('+++') ? paint(32, line) : line.startsWith('-') && !line.startsWith('---') ? paint(31, line) : line);
   }
   out(paint(35, bar));
-  out(`💥 the contents just self-destructed. You will not see them again.`);
-  out(`⏳ the PR is still live: it merges into ${r.base} at ${when(r.expiresAt)} unless you run: snapgit pr reject ${r.id}`);
+  out(`⏳ the fuse is lit: ${r.head} merges into ${r.base} in ${formatDuration(mergesAt - now())} unless you run: snapgit pr reject ${r.id}`);
+  out(`   (re-read the changes any time before then with: snapgit pr open ${r.id})`);
   if (screenshot) out('📸 screenshot detected. The sender will see that in their read receipt.');
 }

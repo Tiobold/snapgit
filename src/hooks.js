@@ -6,7 +6,7 @@ import { git } from './git.js';
 const MARK = '# snapgit-hook';
 const HOOKS = ['post-commit', 'post-checkout', 'post-merge'];
 const BIN = resolve(dirname(fileURLToPath(import.meta.url)), '../bin/snapgit.js');
-const LINE = `${MARK}\n"${process.execPath}" "${BIN}" sweep --quiet || true\n`;
+const LINE = `${MARK}\n"${process.execPath}" "${BIN}" sweep --quiet --offline || true\n`;
 
 /** Install hooks so expired branches vanish without anyone having to remember. */
 export function installHooks(cwd) {

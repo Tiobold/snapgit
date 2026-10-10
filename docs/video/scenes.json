@@ -1,141 +1,66 @@
 [
   {
     "id": "scene01",
-    "kind": "title",
-    "title": "snapgit",
-    "subtitle": "GitHub, but disappearing is a feature.",
-    "narration": "Introducing snapgit. Git meets Snapchat. Because if your code is going to vanish, it should at least be on purpose."
+    "kind": "hook",
+    "kicker": "Oct 7, 2026",
+    "big": "GitHub went down again.",
+    "sub": "Webhooks. Actions. Pull requests.",
+    "narration": "GitHub went down again. October seventh. Webhooks, Actions, pull requests."
   },
   {
     "id": "scene02",
-    "kind": "bullets",
-    "title": "Lately, GitHub has been disappearing on its own",
-    "items": [
-      "Aug 6: Actions and Pages, queued jobs, impact around 10 hours",
-      "Aug 17: roughly 20% errors on web and API, 50% on archive downloads",
-      "Oct 7: webhooks, Actions and pull requests degraded"
-    ],
-    "narration": "Lately, GitHub has been disappearing on its own. On August sixth, queued Actions jobs and throttled webhooks, with impact lasting around ten hours. On August seventeenth, roughly twenty percent errors on the website and A P I, and fifty percent on archive downloads. And on October seventh, webhooks, Actions and pull requests were degraded again."
-  },
-  {
-    "id": "scene03",
     "kind": "stats",
-    "title": "The scoreboard",
     "stats": [
       [
         "257",
-        "incidents tracked in 12 months"
+        "incidents in 12 months"
       ],
       [
         "48",
         "of them major"
-      ],
-      [
-        "37",
-        "in February 2026 alone"
       ]
     ],
     "note": "IncidentHub, May 2025 to April 2026",
-    "narration": "One tracker counted two hundred fifty seven incidents in twelve months, forty eight of them major. February twenty twenty six alone had thirty seven."
+    "narration": "One tracker counted two hundred fifty seven incidents in twelve months. Forty eight of them major."
+  },
+  {
+    "id": "scene03",
+    "kind": "title",
+    "big": "snapgit",
+    "sub": "Git that disappears on purpose.",
+    "narration": "So I built snapgit. Git that disappears on purpose."
   },
   {
     "id": "scene04",
-    "kind": "quote",
-    "title": "",
-    "quote": "Your code was going to disappear anyway.",
-    "sub": "Now you get to pick when.",
-    "narration": "Here is the thing. Your work was always going to disappear at some point. snapgit just lets you pick when."
+    "kind": "terminal",
+    "kicker": "Branches",
+    "code": "$ snapgit snap wip/login --ttl 2h\n📸 wip/login will disappear in 2h (2026-10-10 20:27Z). Commit fast.\n\n$ snapgit ls\nwip/login                      33b0bf5  2h left",
+    "caption": "Self-destruct timer",
+    "narration": "Branches get a self destruct timer. When it hits zero, it's gone."
   },
   {
     "id": "scene05",
     "kind": "terminal",
-    "title": "Disappearing branches",
-    "code": "$ snapgit snap wip/hot-take --ttl 2h\n📸 wip/hot-take will disappear in 2h (2026-10-10 20:03Z). Commit fast.\n\n$ snapgit ls\nwip/hot-take                   c3edc4e  2h left",
-    "narration": "Start a branch with a self destruct timer. Two hours, then it's gone. A real git branch, with a real countdown."
+    "kicker": "Pull requests",
+    "code": "$ snapgit pr open 7d7111d5\nFix login   #7d7111d5\n  33b0bf5 fix login\n+export const login = () => \"ok\";\n⏳ the fuse is lit: wip/login merges into main in 1m unless you run: snapgit pr reject 7d7111d5",
+    "caption": "One button: reject",
+    "narration": "Pull requests have exactly one button. Open one, and a sixty second fuse is lit. You can read every changed line. Or you can reject it."
   },
   {
     "id": "scene06",
     "kind": "terminal",
-    "title": "Gone. Locally and on the remote.",
-    "code": "$ snapgit extend wip/hot-take 1h\n⏳ wip/hot-take now disappears 2026-10-10 21:03Z\n\n(four hours later)\n$ snapgit sweep --remote origin\n👻 ghosted wip/hot-take (was c3edc4e, remote too). Undo: git branch wip/hot-take c3edc4e",
-    "narration": "Need more time? Extend it. Otherwise, the sweep ghosts the branch, on your machine and on the remote, and hands you the commit hash in case you regret it. Hooks make it automatic."
+    "kicker": "60 seconds later",
+    "code": "$ snapgit sweep -r origin\n🔀 PR 7d7111d5: nobody rejected it, so wip/login merged into main and was pushed\n$ git log --oneline --graph\n*   772fef0 Merge wip/login into main\n|\\  \n| * 33b0bf5 fix login\n|/  \n* a689d11 init",
+    "caption": "No reject? It merges.",
+    "narration": "Don't reject it, and it merges. Merge by neglect."
   },
   {
     "id": "scene07",
-    "kind": "terminal",
-    "title": "Pull requests with one button",
-    "code": "$ snapgit pr send fix/login -m \"Fix login\" -r origin\n📨 sent \"Fix login\" (fix/login -> main)\n   id 95962cb1, readable once. Unless rejected, it merges into main at 2026-10-11 18:15Z\n   recipient: snapgit pr open 95962cb1 -r origin   (or snapgit pr reject 95962cb1 -r origin)\n$ snapgit pr open 95962cb1\nFix login   #95962cb1, read once\n  78a8ca1 fix login\n+export const login = () => \"ok\";\n💥 the contents just self-destructed. You will not see them again.\n⏳ the PR is still live: it merges into main at 2026-10-11 18:15Z unless you run: snapgit pr reject 95962cb1",
-    "narration": "Pull requests, with exactly one button. Send one, and the branch goes on the clock. The recipient can read it once, and then the contents burn. The pull request itself stays alive."
-  },
-  {
-    "id": "scene08",
-    "kind": "terminal",
-    "title": "The button is reject",
-    "code": "$ snapgit pr reject b85ca565 -m 'no'\n🚫 rejected. It will not be merged (the sender hears about it when their branch expires)\n\n$ snapgit pr receipts\n👀 Alice <alice@example.com> opened \"Fix login\" (#95962cb1) at 2026-10-10 18:15Z\nreceipts shown once, now deleted",
-    "narration": "The button is reject. No approve. No L G T M. No changes requested. And you still get a read receipt, so you know who looked."
-  },
-  {
-    "id": "scene09",
-    "kind": "terminal",
-    "title": "Merge by neglect",
-    "code": "(a day later)\n$ snapgit sweep --remote origin\n🔀 PR 95962cb1: nobody rejected it, so fix/login merged into main and was pushed\n👻 ghosted fix/login (was 78a8ca1, remote too). Undo: git branch fix/login 78a8ca1\n🚫 PR b85ca565 rejected by Bob <bob@example.com>: \"no\". Nothing merged\n👻 ghosted rewrite-in-rust (was 732f08a, remote too). Undo: git branch rewrite-in-rust 732f08a\n$ git log --oneline --graph -4\n*   ecde4d3 Merge fix/login into main\n|\\  \n| * 78a8ca1 fix login\n|/  \n* b4f7492 init",
-    "narration": "And if nobody rejects it? When the branch self destructs, it merges. Merge by neglect. A rejected one dies with its branch, and nothing lands."
-  },
-  {
-    "id": "scene10",
-    "kind": "terminal",
-    "title": "Streaks. Stories.",
-    "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   ecde4d3  Merge fix/login into main  (origin/main)\n   b4f7492  init  (no branch tip)\n   78a8ca1  fix login  (no branch tip)\n   🔥 1 day streak\n   (this story will not be saved)",
-    "narration": "Then your streak, and your story: your last day in git, which will not be saved."
-  },
-  {
-    "id": "scene11",
-    "kind": "bullets",
-    "title": "Under the hood, it's just git",
-    "items": [
-      "Opening a PR claims a receipt ref with a create-only push, so only one reader wins",
-      "The deadline is the branch timer; expiry merges with plain git",
-      "Timers live in your git config; hooks sweep for you",
-      "No servers, so there is nothing to take down"
-    ],
-    "narration": "Under the hood, it's just git. The first reader claims the pull request with an atomic push, so only one person ever sees the contents. The deadline is the branch timer, and expiry merges with plain git. Timers live in your git config. Zero dependencies, and no servers, so there is nothing for us to take down."
-  },
-  {
-    "id": "scene12",
-    "kind": "twocol",
-    "title": "Downtime, compared",
-    "colA_title": "GitHub",
-    "colA_body": "Disappears unexpectedly\nUnscheduled\nFor hours",
-    "colB_title": "snapgit",
-    "colB_body": "Disappears on purpose\nScheduled, by you\nFor as long as you said",
-    "narration": "The difference? GitHub disappears unexpectedly. snapgit disappears on purpose, on a schedule you chose."
-  },
-  {
-    "id": "scene13",
     "kind": "outro",
-    "title": "",
-    "subtitle": "Try snapgit",
-    "items": [
-      "git clone github.com/Tiobold/snapgit",
-      "npm link",
-      "snapgit snap wip/idea --ttl 2h"
-    ],
-    "footer": "Hosted on GitHub. We know.",
-    "narration": "Try snapgit. Clone it, link it, and start a branch with a timer. It's hosted on GitHub. We know."
-  },
-  {
-    "id": "scene14",
-    "kind": "sources",
-    "title": "Sources",
-    "items": [
-      "blog.incidenthub.cloud: GitHub reliability and outage history 2025 to 2026",
-      "blog.incidenthub.cloud: The August 6, 2026 GitHub Actions outage",
-      "bleepingcomputer.com: Microsoft confirms GitHub is down worldwide",
-      "theregister.com: GitHub appears to be struggling with three nines availability",
-      "androidauthority.com: GitHub outage, October 2026",
-      "opensourceforu.com: GitHub outage hits repositories, Actions and API"
-    ],
-    "note": "Figures come from press and third-party trackers. See GitHub's own availability reports for official numbers.",
-    "narration": "Outage figures come from press and third party trackers. See GitHub's own availability reports for the official numbers."
+    "big": "No servers.",
+    "sub": "Nothing to take down.",
+    "cta": "github.com/Tiobold/snapgit",
+    "tag": "Hosted on GitHub. We know.",
+    "narration": "No servers, so there's nothing to take down. snapgit. Link in bio. Hosted on GitHub. We know."
   }
 ]

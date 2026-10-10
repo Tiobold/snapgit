@@ -1,0 +1,5 @@
+GitHub went down again, so I built git that disappears on purpose. 👻
+Branches with self-destruct timers. PRs with one button: reject, or it merges 60 seconds after you open it.
+github.com/Tiobold/snapgit
+
+#git #github #devtok #programming #coding #softwareengineer #opensource #snapchat

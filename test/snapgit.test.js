@@ -113,26 +113,67 @@ const sendId = (dir, ...extra) => {
 };
 const mainHas = (dir, file) => sh(dir, 'git', ['cat-file', '-e', `main:${file}`]).status === 0;
 
-test('sending a PR puts the branch on the clock; contents can be read once, the PR lives on', () => {
+test('sending a PR puts the branch on the clock; opening shows the changed code and lights a 60s fuse', () => {
   const dir = featureRepo();
   const sent = snap(dir, ['pr', 'send', '--ttl', '3h', '-m', 'Add feature\nplease look']);
   assert.equal(sent.status, 0, sent.stderr);
-  assert.match(sent.stdout, /merges into main/);
+  assert.match(sent.stdout, /60 seconds after it is first opened/);
   const id = sent.stdout.match(/id ([0-9a-f]{8})/)[1];
   assert.match(snap(dir, ['ls']).stdout, /feat.*3h left/);
+  assert.match(snap(dir, ['pr', 'ls']).stdout, /unopened/);
 
   const first = snap(dir, ['pr', 'open', id, '--screenshot']);
   assert.equal(first.status, 0, first.stderr);
   assert.match(first.stdout, /Add feature/);
   assert.match(first.stdout, /\+new feature/);
-  assert.match(first.stdout, /unless you run: snapgit pr reject/);
+  assert.match(first.stdout, /fuse is lit.*merges into main in 1m unless you run: snapgit pr reject/);
   assert.match(first.stdout, /screenshot detected/);
 
-  const second = snap(dir, ['pr', 'open', id, '--screenshot']);
-  assert.notEqual(second.status, 0);
-  assert.match(second.stderr, /already opened.*still live/);
-  assert.match(snap(dir, ['pr', 'ls']).stdout, new RegExp(`${id}.*opened.*merges in`));
-  assert.doesNotMatch(git(dir, 'cat-file', '-p', git(dir, 'rev-parse', `refs/snapgit/pr/${id}`)), /new feature/);
+  // The opener can keep reading the changed code while the fuse burns.
+  const again = snap(dir, ['pr', 'open', id, '--screenshot'], T0 + 20_000);
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /\+new feature/);
+  assert.match(again.stdout, /merges into main in 40s/);
+  assert.match(snap(dir, ['pr', 'ls'], T0 + 20_000).stdout, new RegExp(`${id}.*opened by Test.*merges in 40s`));
+});
+
+test('a PR merges 60 seconds after it is opened, even though the branch timer has hours left', () => {
+  const dir = featureRepo();
+  const id = sendId(dir);
+  git(dir, 'switch', '-q', 'main');
+  assert.equal(snap(dir, ['pr', 'open', id, '--screenshot']).status, 0);
+  assert.doesNotMatch(snap(dir, ['sweep'], T0 + 30_000).stdout, /merged/);
+  assert.ok(!mainHas(dir, 'f.txt'));
+
+  const swept = snap(dir, ['sweep'], T0 + 61_000);
+  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it, so feat merged into main`));
+  assert.ok(mainHas(dir, 'f.txt'));
+  assert.ok(!branches(dir).includes('feat')); // merged branches don't wait for their timer
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit'), '');
+});
+
+test('rejecting inside the fuse window stops the merge; the fuse cannot be re-lit afterwards', () => {
+  const dir = featureRepo();
+  const id = sendId(dir);
+  git(dir, 'switch', '-q', 'main');
+  snap(dir, ['pr', 'open', id, '--screenshot']);
+  assert.equal(snap(dir, ['pr', 'reject', id, '-m', 'nope'], T0 + 30_000).status, 0);
+  const swept = snap(dir, ['sweep'], T0 + 61_000);
+  assert.match(swept.stdout, /rejected by Test <test@example.com>: "nope"/);
+  assert.ok(!mainHas(dir, 'f.txt'));
+  assert.ok(branches(dir).includes('feat')); // the branch still dies on its own schedule
+  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.ok(!branches(dir).includes('feat'));
+});
+
+test('once the fuse has burned out the PR cannot be opened again', () => {
+  const dir = featureRepo();
+  const id = sendId(dir);
+  git(dir, 'switch', '-q', 'main');
+  snap(dir, ['pr', 'open', id, '--screenshot']);
+  const late = snap(dir, ['pr', 'open', id, '--screenshot'], T0 + 61_000);
+  assert.notEqual(late.status, 0);
+  assert.match(late.stderr, /fuse burned out/);
 });
 
 test('piping a PR without --screenshot refuses and does not burn it', () => {
@@ -144,7 +185,7 @@ test('piping a PR without --screenshot refuses and does not burn it', () => {
   assert.equal(snap(dir, ['pr', 'open', id, '--screenshot']).status, 0);
 });
 
-test('a PR nobody rejects merges into main when its branch expires, then the branch vanishes', () => {
+test('an unopened PR nobody rejects merges into main when its branch expires, then the branch vanishes', () => {
   const dir = featureRepo();
   const id = sendId(dir);
   git(dir, 'switch', '-q', 'main');
@@ -198,7 +239,7 @@ test('a conflicting PR is held, not merged and not deleted', () => {
   git(dir, 'switch', '-q', 'main');
   commit(dir, 'f.txt', 'someone else wrote this\n', 'conflicting change');
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
-  assert.match(swept.stdout, /kept feat: PR [0-9a-f]{8} held: merge conflict/);
+  assert.match(swept.stdout, /kept feat: PR held: merge conflict/);
   assert.ok(branches(dir).includes('feat'));
   assert.equal(git(dir, 'show', 'main:f.txt'), 'someone else wrote this');
   assert.equal(git(dir, 'status', '--porcelain'), '');
@@ -284,10 +325,11 @@ test('over a remote: one reader wins, anyone can reject, the sender honors it', 
   assert.match(a.stdout, /Over the wire/);
   const b = snap(bob, ['pr', 'open', id, '--screenshot']);
   assert.notEqual(b.status, 0);
-  assert.match(b.stderr, /already opened|someone else/);
+  assert.match(b.stderr, /already being reviewed by Alice <alice@example.com>/);
+  assert.equal(snap(alice, ['pr', 'open', id, '--screenshot'], T0 + 10_000).status, 0); // Alice may re-read
   assert.equal(git(alice, 'for-each-ref', 'refs/snapgit/pr'), ''); // recipients keep nothing
 
-  // Bob never read it, but he can still reject it.
+  // Bob was locked out of reading it, but anyone can still reject it.
   assert.equal(snap(bob, ['pr', 'reject', id, '-r', 'origin', '-m', 'nope']).status, 0);
   assert.notEqual(snap(bob, ['pr', 'reject', id, '-r', 'origin']).status, 0); // already rejected
   const swept = snap(sender, ['sweep', '--remote', 'origin'], T0 + 2 * HOUR);
@@ -319,7 +361,28 @@ test('if the remote cannot be reached, the merge is held rather than risking a m
   assert.ok(branches(sender).includes('feat'));
 });
 
-test('read receipts tell the sender who opened the PR and whether they screenshotted, once', () => {
+test('over a remote: the sender merges 60s after a recipient opens, and --remote pushes it', () => {
+  const { bare, sender, clone } = remotes();
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '5h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  const alice = clone('Alice');
+  assert.equal(snap(alice, ['pr', 'open', id, '-r', 'origin', '--screenshot']).status, 0);
+  assert.doesNotMatch(snap(sender, ['sweep', '--remote', 'origin'], T0 + 30_000).stdout, /merged/);
+  const swept = snap(sender, ['sweep', '--remote', 'origin'], T0 + 61_000);
+  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it.*and was pushed`));
+  assert.equal(sh(bare, 'git', ['cat-file', '-e', 'main:f.txt']).status, 0);
+  assert.equal(git(bare, 'ls-remote', '.', 'refs/snapgit/*'), '');
+  assert.match(snap(alice, ['pr', 'open', id, '-r', 'origin', '--screenshot']).stderr, /gone/);
+});
+
+test('hooks sweep offline: local-only PRs settle, remote ones wait for an online sweep', () => {
+  const { sender } = remotes();
+  snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']);
+  const off = snap(sender, ['sweep', '--offline'], T0 + 2 * HOUR);
+  assert.doesNotMatch(off.stdout, /merged/);
+  assert.ok(!mainHas(sender, 'f.txt'));
+});
+
+test('read receipts tell the sender who opened the PR and whether they screenshotted', () => {
   const { bare, sender, clone } = remotes();
   const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '-m', 'Receipt me']).stdout.match(/id ([0-9a-f]{8})/)[1];
   const alice = clone('Alice');
@@ -329,11 +392,10 @@ test('read receipts tell the sender who opened the PR and whether they screensho
   assert.match(snap(alice, ['pr', 'receipts']).stdout, /no new read receipts/);
 
   const r = snap(sender, ['pr', 'receipts']);
+  assert.equal(snap(sender, ['pr', 'receipts']).stdout, r.stdout);
   assert.match(r.stdout, /Alice <alice@example.com> opened "Receipt me"/);
   assert.match(r.stdout, /screenshot/);
-  assert.match(snap(sender, ['pr', 'receipts']).stdout, /no new read receipts/);
-  assert.match(snap(sender, ['pr', 'ls']).stdout, /opened/); // my copy is refreshed to the burned version
-  assert.equal(git(bare, 'ls-remote', '.', 'refs/snapgit/receipt/*'), '');
+  assert.match(snap(sender, ['pr', 'ls']).stdout, /opened by Alice/);
 });
 
 test('streak counts consecutive days and survives until tomorrow', () => {

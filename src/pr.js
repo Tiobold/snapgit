@@ -25,10 +25,13 @@ const remoteHas = (remote, ref, cwd) => {
 };
 const viaFor = (record, remote, cwd) => remote || (record?.remote && hasRemote(record.remote, cwd) ? record.remote : null);
 
+/** How long a reviewer has to reject once they have opened a PR. SNAPGIT_FUSE_MS overrides (tests, demos). */
+export const fuseMs = () => Number(process.env.SNAPGIT_FUSE_MS || 60_000);
+
 /**
  * A PR is a JSON blob under refs/snapgit/pr/<id>. It has exactly one outcome: someone rejects it, or
- * its head branch expires and it is merged. Its deadline is the branch's timer, so sending a PR
- * puts the branch on the clock.
+ * it merges. It merges fuseMs after somebody first opens it, or when its head branch expires,
+ * whichever comes first. Sending a PR puts the branch on the clock.
  */
 export function createPr({ cwd, head, base, message, ttlMs, remote }) {
   head ||= currentBranch(cwd);
@@ -47,7 +50,6 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
   const record = {
     v: 2,
     id: randomBytes(4).toString('hex'),
-    state: 'pending',
     title: lines[0] || git(['log', '-1', '--format=%s', head], { cwd }),
     message: lines.slice(1).join('\n').trim(),
     author: ident(cwd),
@@ -85,9 +87,9 @@ export function listRemotePrIds(remote, cwd) {
 function burn(id, { cwd, via }) {
   run(['update-ref', '-d', PR + id], { cwd });
   run(['update-ref', '-d', REJECT + id], { cwd });
+  run(['update-ref', '-d', RECEIPT + id], { cwd });
   if (via) {
-    run(['push', via, '--delete', PR + id], { cwd });
-    run(['push', via, '--delete', REJECT + id], { cwd });
+    for (const r of [PR, REJECT, RECEIPT]) run(['push', via, '--delete', r + id], { cwd });
   }
 }
 
@@ -102,13 +104,14 @@ export function burnPr(id, { cwd, remote }) {
 }
 
 /**
- * Read a PR. The contents can be read exactly once: the first opener claims a receipt ref (a create-only
- * push, so only one racer wins), then the PR is rewritten without its contents. The PR itself stays
- * alive. It can still be rejected, and it will still merge.
+ * Open a PR. The first opener claims a receipt ref (a create-only push, so only one racer wins) and that
+ * starts the fuse: the PR merges fuseMs later unless rejected. The opener may re-read the changed code
+ * until then; nobody else may.
  */
 export function openPr(id, { cwd, remote, screenshot = false }) {
   check(id);
   const ref = PR + id;
+  const rref = RECEIPT + id;
   const via = viaFor(readRef(ref, cwd)?.data, remote, cwd);
   if (via) {
     const where = remoteHas(via, ref, cwd);
@@ -118,29 +121,31 @@ export function openPr(id, { cwd, remote, screenshot = false }) {
       throw new Error(`PR ${id} is gone (merged, rejected, withdrawn, or never existed)`);
     }
     run(['fetch', '--quiet', via, `+${ref}:${ref}`], { cwd });
+    if (remoteHas(via, rref, cwd) === 'present') run(['fetch', '--quiet', via, `+${rref}:${rref}`], { cwd });
   }
   const found = readRef(ref, cwd);
   if (!found) throw new Error(`PR ${id} is gone (merged, rejected, withdrawn, or never existed)`);
   const record = found.data;
-  if (record.state === 'opened') {
-    throw new Error(`PR ${id} was already opened and its contents are burned. It is still live: it merges ${deadline(record)} unless rejected`);
-  }
-  if (record.expiresAt <= now()) throw new Error(`PR ${id} is past its deadline and about to merge. Too late to read it`);
+  const me = ident(cwd);
 
-  const receipt = { id, title: record.title, sender: record.author, opener: ident(cwd), openedAt: now(), screenshot };
-  const rref = RECEIPT + id;
-  if (run(['rev-parse', '-q', '--verify', rref], { cwd }).ok) throw new Error(`PR ${id} was opened by someone else a moment ago`);
-  git(['update-ref', rref, putBlob(receipt, cwd)], { cwd });
-  if (via && !run(['push', via, `${rref}:${rref}`], { cwd }).ok) {
-    run(['update-ref', '-d', rref], { cwd });
-    throw new Error(`PR ${id} was opened by someone else a moment ago`);
+  let receipt = readRef(rref, cwd)?.data;
+  if (receipt) {
+    if (receipt.opener !== me) throw new Error(`PR ${id} is already being reviewed by ${receipt.opener}`);
+    if (receipt.openedAt + fuseMs() <= now()) throw new Error(`PR ${id}: the fuse burned out. It is merging`);
+  } else {
+    if (record.expiresAt <= now()) throw new Error(`PR ${id} is past its deadline and about to merge. Too late to open it`);
+    receipt = { id, title: record.title, sender: record.author, opener: me, openedAt: now(), screenshot };
+    git(['update-ref', rref, putBlob(receipt, cwd)], { cwd });
+    if (via && !run(['push', via, `${rref}:${rref}`], { cwd }).ok) {
+      run(['update-ref', '-d', rref], { cwd });
+      throw new Error(`PR ${id} was opened by someone else a moment ago`);
+    }
   }
-
-  const redacted = { ...record, state: 'opened', message: '', commits: [], stat: '', patch: '' };
-  git(['update-ref', ref, putBlob(redacted, cwd)], { cwd });
-  if (via) run(['push', '--force', via, `${ref}:${ref}`], { cwd });
-  if (!branchExists(record.head, cwd)) run(['update-ref', '-d', ref], { cwd }); // a recipient keeps nothing
-  return { record };
+  if (!branchExists(record.head, cwd)) {
+    run(['update-ref', '-d', ref], { cwd }); // a recipient keeps nothing; re-open fetches it again
+    if (via) run(['update-ref', '-d', rref], { cwd });
+  }
+  return { record, receipt, mergesAt: Math.min(record.expiresAt, receipt.openedAt + fuseMs()) };
 }
 
 export const deadline = (record) => `${new Date(record.expiresAt).toISOString().replace('T', ' ').slice(0, 16)}Z`;
@@ -164,7 +169,7 @@ export function rejectPr(id, { cwd, remote, reason = '' }) {
   return rec;
 }
 
-/** Collect (and burn) opened-receipts for PRs I sent, and refresh my copies to the burned version. */
+/** Opened-receipts for PRs I sent: who opened it, when, and whether they screenshotted. */
 export function collectReceipts({ cwd, remote }) {
   if (remote) run(['fetch', '--quiet', remote, `+${RECEIPT}*:${RECEIPT}*`], { cwd });
   const me = ident(cwd);
@@ -173,17 +178,14 @@ export function collectReceipts({ cwd, remote }) {
   for (const line of refs) {
     const [ref, blob] = line.split(' ');
     const receipt = JSON.parse(git(['cat-file', 'blob', blob], { cwd }));
-    if (receipt.sender !== me) {
-      if (remote) run(['update-ref', '-d', ref], { cwd }); // only my local copy; the owner still has theirs
-      continue;
-    }
-    mine.push(receipt);
-    run(['update-ref', '-d', ref], { cwd });
-    if (remote) run(['push', remote, '--delete', ref], { cwd });
-    if (remote && readRef(PR + receipt.id, cwd)) run(['fetch', '--quiet', remote, `+${PR + receipt.id}:${PR + receipt.id}`], { cwd });
+    if (receipt.sender === me) mine.push(receipt);
+    else if (remote) run(['update-ref', '-d', ref], { cwd }); // someone else's: drop my fetched copy only
   }
   return mine.sort((a, b) => a.openedAt - b.openedAt);
 }
+
+/** The local receipt for a PR, if it has been opened. */
+export const receiptFor = (id, cwd) => readRef(RECEIPT + id, cwd)?.data ?? null;
 
 /** Keep the PR's advertised deadline in step when its branch gets more time. */
 export function retimePr(branch, expiresAt, cwd) {
@@ -231,32 +233,57 @@ function mergeInto(rec, cwd) {
 }
 
 /**
- * Called when a branch's timer runs out. If it has a PR: honor a rejection that arrived in time,
- * otherwise merge. Never destroys the branch on doubt (returns action 'hold').
- * Returns { action: 'none' | 'merged' | 'rejected' | 'hold', ... }.
+ * Settle every PR that is due: rejected ones are dropped, the rest are merged. A PR is due when its fuse
+ * (opened + fuseMs) or its branch timer runs out. Doubt never destroys work: anything that can't be
+ * merged or verified is reported as held. With offline, PRs that live on a remote are left alone.
+ * Returns { events, merged: Set<branch>, held: Map<branch, reason> }.
  */
-export function resolveBranchPr(branch, { cwd, push = false }) {
-  const rec = prForBranch(branch, cwd);
-  if (!rec) return { action: 'none' };
-  const expiry = getExpiry(branch, cwd) ?? rec.expiresAt;
-  const via = viaFor(rec, undefined, cwd);
-  const rref = REJECT + rec.id;
-  if (via) {
-    const where = remoteHas(via, rref, cwd);
-    if (where === 'unreachable') return { action: 'hold', id: rec.id, reason: `cannot reach ${via} to check for a rejection, so no merge yet` };
-    if (where === 'present') run(['fetch', '--quiet', via, `+${rref}:${rref}`], { cwd });
-  }
-  const rejection = readRef(rref, cwd)?.data;
-  if (rejection && rejection.rejectedAt <= expiry) {
+export function settlePrs({ cwd, push = false, offline = false }) {
+  const events = [];
+  const merged = new Set();
+  const held = new Map();
+  for (const rec of listLocalPrs(cwd)) {
+    if (!branchExists(rec.head, cwd)) continue;
+    const via = viaFor(rec, undefined, cwd);
+    if (via && offline) continue;
+    const expiry = getExpiry(rec.head, cwd) ?? rec.expiresAt;
+    const rref = REJECT + rec.id;
+    const cref = RECEIPT + rec.id;
+    const unreachable = () => {
+      if (expiry <= now()) held.set(rec.head, `cannot reach ${via} to check for a rejection, so no merge yet`);
+    };
+    if (via) {
+      const r = remoteHas(via, cref, cwd);
+      if (r === 'unreachable') { unreachable(); continue; }
+      if (r === 'present') run(['fetch', '--quiet', via, `+${cref}:${cref}`], { cwd });
+    }
+    const receipt = readRef(cref, cwd)?.data;
+    const due = Math.min(expiry, receipt ? receipt.openedAt + fuseMs() : Infinity);
+    if (due > now()) continue;
+
+    if (via) {
+      const r = remoteHas(via, rref, cwd);
+      if (r === 'unreachable') { unreachable(); held.set(rec.head, `cannot reach ${via} to check for a rejection, so no merge yet`); continue; }
+      if (r === 'present') run(['fetch', '--quiet', via, `+${rref}:${rref}`], { cwd });
+    }
+    const rejection = readRef(rref, cwd)?.data;
+    if (rejection && rejection.rejectedAt <= due) {
+      burn(rec.id, { cwd, via });
+      events.push({ action: 'rejected', id: rec.id, head: rec.head, by: rejection.rejector, reason: rejection.reason });
+      continue;
+    }
+    const result = mergeInto(rec, cwd);
+    if (!result.ok) {
+      held.set(rec.head, result.reason);
+      events.push({ action: 'hold', id: rec.id, head: rec.head, reason: result.reason });
+      continue;
+    }
+    const pushed = push && via ? run(['push', via, rec.base], { cwd }).ok : false;
     burn(rec.id, { cwd, via });
-    return { action: 'rejected', id: rec.id, by: rejection.rejector, reason: rejection.reason };
+    merged.add(rec.head);
+    events.push({ action: 'merged', id: rec.id, head: rec.head, base: rec.base, late: !!rejection, pushed, viewed: !!receipt });
   }
-  const merged = mergeInto(rec, cwd);
-  if (!merged.ok) return { action: 'hold', id: rec.id, reason: merged.reason };
-  let pushed = false;
-  if (push && via) pushed = run(['push', via, rec.base], { cwd }).ok;
-  burn(rec.id, { cwd, via });
-  return { action: 'merged', id: rec.id, base: rec.base, late: !!rejection, pushed };
+  return { events, merged, held };
 }
 
 /** PRs whose branch has vanished (deleted by hand) have nothing left to merge: burn them. */

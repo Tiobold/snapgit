@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Pipeline: scenes.json -> HTML slides -> PNGs -> offline Kokoro narration -> snapgit.mp4
+# Pipeline: scenes.json -> 1080x1920 HTML slides -> PNGs -> offline Kokoro narration -> snapgit-tiktok.mp4
 # Usage: ./build.sh [--skip-audio]     Env: PYTHON (interpreter with kokoro-onnx, soundfile, pillow), CHROME
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="${PYTHON:-python3}"; export PYTHON="$PY" VIDEO_DIR="$DIR"
-OUT="$DIR/snapgit.mp4"; PAD=0.7; FADE=0.25
+OUT="$DIR/snapgit-tiktok.mp4"; PAD=0.7; FADE=0.25
 node "$DIR/render_slides.cjs"
 "$DIR/render_pngs.sh"
 [ "${1:-}" = "--skip-audio" ] || "$PY" "$DIR/kokoro_tts.py" "$DIR/scenes.json" "$DIR/audio" "${VOICE:-af_heart}" "${SPEED:-1.05}"

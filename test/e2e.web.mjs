@@ -1,0 +1,201 @@
+// Browser end-to-end test for the web UI. Run: node test/e2e.web.mjs   (needs playwright + Chromium)
+// GitHub's API is mocked in-memory, and the PR it serves is created by the real snapgit CLI, so this also
+// proves the web UI and the CLI agree on the data format in both directions.
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createRequire } from 'node:module';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve, extname } from 'node:path';
+
+const require = createRequire(import.meta.url);
+let chromium;
+try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require('/opt/node22/lib/node_modules/playwright')); }
+
+const ROOT = resolve('web');
+const BIN = resolve('bin/snapgit.js');
+const sh = (cwd, cmd, args, env = {}) => spawnSync(cmd, args, { cwd, encoding: 'utf8', env: { ...process.env, ...env } });
+const git = (cwd, ...a) => { const r = sh(cwd, 'git', a); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+
+// --- a real snapgit PR made by the real CLI
+const repo = mkdtempSync(join(tmpdir(), 'snapgit-e2e-'));
+git(repo, 'init', '-q', '-b', 'main');
+git(repo, 'config', 'user.name', 'Sender'); git(repo, 'config', 'user.email', 'sender@example.com');
+writeFileSync(join(repo, 'a.txt'), 'hello\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'init');
+git(repo, 'switch', '-q', '-c', 'feat');
+writeFileSync(join(repo, 'f.txt'), '<script>alert(1)</script>\n'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'add feature');
+const T0 = Date.now();
+const sent = sh(repo, 'node', [BIN, 'pr', 'send', '--ttl', '1h', '-m', 'Real PR\nfrom the CLI'], { SNAPGIT_NOW: String(T0) });
+const id = sent.stdout.match(/id ([0-9a-f]{8})/)[1];
+git(repo, 'switch', '-q', 'main');
+const prJson = git(repo, 'cat-file', 'blob', git(repo, 'rev-parse', `refs/snapgit/pr/${id}`));
+
+// --- mocked GitHub
+const blobs = new Map(); const refs = new Map();
+const put = (content) => { const sha = String(blobs.size + 1).padStart(40, '0'); blobs.set(sha, content); return sha; };
+refs.set(`pr/${id}`, put(prJson));
+const jsonRes = (status, body) => ({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) });
+async function githubMock(route) {
+  const req = route.request(); const url = new URL(req.url()); const p = url.pathname;
+  if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' } });
+  if (p === '/user') return route.fulfill(jsonRes(req.headers().authorization === 'Bearer good' ? 200 : 401, { login: 'webuser' }));
+  const m = p.match(/^\/repos\/o\/r\/(.+)$/); if (!m) return route.fulfill(jsonRes(404, {}));
+  const rest = m[1];
+  let r;
+  if ((r = rest.match(/^git\/ref\/snapgit\/(\w+)\/(\w+)$/))) {
+    const sha = refs.get(`${r[1]}/${r[2]}`);
+    return route.fulfill(sha ? jsonRes(200, { object: { sha, type: 'blob' } }) : jsonRes(404, {}));
+  }
+  if ((r = rest.match(/^git\/blobs\/(\w+)$/))) return route.fulfill(jsonRes(200, { content: Buffer.from(blobs.get(r[1])).toString('base64'), encoding: 'base64' }));
+  if (rest === 'git/blobs' && req.method() === 'POST') {
+    if (!req.headers().authorization) return route.fulfill(jsonRes(401, {}));
+    return route.fulfill(jsonRes(201, { sha: put(JSON.parse(req.postData()).content) }));
+  }
+  if (rest === 'git/refs' && req.method() === 'POST') {
+    const { ref, sha } = JSON.parse(req.postData()); const key = ref.replace('refs/snapgit/', '');
+    if (refs.has(key)) return route.fulfill(jsonRes(422, { message: 'Reference already exists' }));
+    refs.set(key, sha); return route.fulfill(jsonRes(201, { ref }));
+  }
+  return route.fulfill(jsonRes(404, {}));
+}
+
+// --- static server for web/
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+// Serve with the exact headers vercel.json will, so a CSP violation fails the run.
+const vercelHeaders = Object.fromEntries(JSON.parse(readFileSync('web/vercel.json', 'utf8')).headers[0].headers.map((h) => [h.key, h.value]));
+const server = http.createServer((req, res) => {
+  const path = req.url.split('?')[0]; const file = join(ROOT, path === '/' ? 'index.html' : path);
+  if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
+  try { res.writeHead(200, { ...vercelHeaders, 'content-type': MIME[extname(file)] || 'application/octet-stream' }).end(readFileSync(file)); } catch { res.writeHead(404).end(); }
+}).listen(0);
+const base = `http://localhost:${server.address().port}`;
+
+const browser = await chromium.launch();
+const results = [];
+const test = async (name, fn) => { try { await fn(); results.push(['ok', name]); } catch (e) { results.push(['FAIL', name, e]); } };
+
+async function newPage() {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => m.type() === 'error' && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
+  await page.route('https://api.github.com/**', githubMock);
+  return { page, errors };
+}
+
+await test('demo: locked until opened, then diff + countdown, then merges when the fuse burns out', async () => {
+  const { page, errors } = await newPage();
+  await page.clock.install({ time: new Date('2026-10-10T12:00:00Z') });
+  await page.goto(base);
+  await page.click('#demo');
+  await page.waitForSelector('#pr:not([hidden])');
+  assert.equal(await page.locator('#diff').isHidden(), true, 'diff hidden before opening');
+  assert.match(await page.locator('#status').innerText(), /Unopened/);
+  await page.click('#open');
+  await page.waitForSelector('#diff:not([hidden])');
+  assert.match(await page.locator('#diff').innerText(), /RETRIES = 0/);
+  assert.equal(await page.locator('#clock').innerText(), '1:00');
+  await page.clock.fastForward(30_000);
+  assert.equal(await page.locator('#clock').innerText(), '0:30');
+  assert.match(await page.locator('#status').innerText(), /fuse is lit/);
+  await page.clock.fastForward(31_000);
+  assert.match(await page.locator('#status').innerText(), /fuse burned out.*nothing was merged/s);
+  assert.equal(await page.locator('#diff').isHidden(), true, 'diff hidden after the fuse');
+  assert.deepEqual(errors, []);
+});
+
+await test('demo: rejecting inside the window stops the merge', async () => {
+  const { page } = await newPage();
+  await page.clock.install({ time: new Date('2026-10-10T12:00:00Z') });
+  await page.goto(base);
+  await page.click('#demo'); await page.click('#open');
+  await page.fill('#reason', 'too hasty');
+  await page.clock.fastForward(10_000);
+  await page.click('#reject-form button');
+  assert.match(await page.locator('#status').innerText(), /Rejected by you.*too hasty.*Nothing will merge/s);
+  await page.clock.fastForward(120_000);
+  assert.match(await page.locator('#status').innerText(), /Rejected/);
+});
+
+await test('github: a PR created by the real CLI loads, the diff is shown as text (no XSS), and the receipt is written', async () => {
+  const { page, errors } = await newPage();
+  await page.goto(base);
+  await page.fill('#repo', 'https://github.com/o/r');
+  await page.fill('#pr-id', id);
+  await page.fill('#token', 'good');
+  await page.click('#find button[type=submit]');
+  await page.waitForSelector('#pr:not([hidden])');
+  assert.equal(await page.locator('#pr-title').innerText(), 'Real PR');
+  assert.match(await page.locator('#pr-meta').innerText(), /Sender <sender@example.com> · feat → main · o\/r/);
+  assert.equal(await page.locator('#diff').isHidden(), true);
+  await page.click('#open');
+  await page.waitForSelector('#diff:not([hidden])');
+  assert.match(await page.locator('#diff').innerText(), /<script>alert\(1\)<\/script>/);
+  assert.equal(await page.locator('#diff script').count(), 0);
+  const receipt = JSON.parse(blobs.get(refs.get(`receipt/${id}`)));
+  assert.equal(receipt.opener, 'webuser <webuser@users.noreply.github.com>');
+  assert.equal(receipt.sender, 'Sender <sender@example.com>');
+  assert.deepEqual(errors, []);
+});
+
+await test('github: a second person is locked out of reading it, but can still reject', async () => {
+  const { page } = await newPage();
+  await page.goto(base);
+  await page.fill('#repo', 'o/r'); await page.fill('#pr-id', id); await page.fill('#token', ''); // read-only visitor
+  await page.click('#find button[type=submit]');
+  await page.waitForSelector('#pr:not([hidden])');
+  assert.match(await page.locator('#status').innerText(), /webuser.*is reviewing it/);
+  assert.equal(await page.locator('#diff').isHidden(), true);
+});
+
+await test('github: webuser re-opens their own PR and rejects; the real CLI honors that rejection', async () => {
+  const { page } = await newPage();
+  await page.goto(base);
+  await page.fill('#repo', 'o/r'); await page.fill('#pr-id', id); await page.fill('#token', 'good');
+  await page.click('#find button[type=submit]');
+  await page.waitForSelector('#diff:not([hidden])'); // same opener may keep reading
+  await page.fill('#reason', 'from the browser');
+  await page.click('#reject-form button');
+  await page.waitForSelector('#status:has-text("Rejected by webuser")');
+  const rejection = JSON.parse(blobs.get(refs.get(`reject/${id}`)));
+  assert.equal(rejection.reason, 'from the browser');
+
+  // Feed the browser-made refs to the CLI repo, as a fetch from the remote would, and sweep after the fuse.
+  const putRef = (name, json) => {
+    const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo, input: json, encoding: 'utf8' }).stdout.trim();
+    git(repo, 'update-ref', `refs/snapgit/${name}/${id}`, blob);
+  };
+  putRef('receipt', blobs.get(refs.get(`receipt/${id}`)));
+  putRef('reject', blobs.get(refs.get(`reject/${id}`)));
+  const swept = sh(repo, 'node', [BIN, 'sweep'], { SNAPGIT_NOW: String(Date.now() + 61_000) });
+  assert.match(swept.stdout, /PR .* rejected by webuser <webuser@users.noreply.github.com>: "from the browser"/);
+  assert.equal(sh(repo, 'git', ['cat-file', '-e', 'main:f.txt']).status !== 0, true, 'nothing merged');
+});
+
+await test('github: bad inputs and bad tokens give friendly errors', async () => {
+  const { page } = await newPage();
+  await page.goto(base);
+  await page.fill('#repo', 'nonsense'); await page.fill('#pr-id', id);
+  await page.click('#find button[type=submit]');
+  assert.match(await page.locator('#error').innerText(), /owner\/repo/);
+  await page.fill('#repo', 'o/r'); await page.fill('#pr-id', 'zzzz');
+  await page.click('#find button[type=submit]');
+  assert.match(await page.locator('#error').innerText(), /8 hex/);
+  await page.fill('#pr-id', 'deadbeef');
+  await page.click('#find button[type=submit]');
+  await page.waitForSelector('#error:not([hidden]):has-text("is gone")');
+});
+
+await test('mobile layout has no horizontal scroll', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 800 } });
+  const page = await ctx.newPage();
+  await page.goto(base); await page.click('#demo'); await page.click('#open');
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert.ok(overflow <= 0, `page overflows by ${overflow}px`);
+});
+
+await browser.close(); server.close();
+for (const [s, name, e] of results) console.log(s === 'ok' ? '✔' : '✘', name, e ? `\n   ${e.message}` : '');
+process.exit(results.some((r) => r[0] === 'FAIL') ? 1 : 0);
