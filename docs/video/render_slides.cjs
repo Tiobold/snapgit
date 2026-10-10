@@ -33,6 +33,8 @@ const CSS = `
   .cap span { background: #FFFC00; color: #000; padding: 0 .2em; border-radius: .16em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   .cta { font-family: 'DejaVu Sans Mono', monospace; font-size: 46px; border: 3px solid #FFFC00; border-radius: 22px; padding: 26px 30px; word-break: break-all; }
   .tag { font-size: 44px; color: #aaa; }
+  .line { font-size: 78px; line-height: 1.15; font-weight: 800; border-left: 14px solid #FFFC00; padding-left: 36px; }
+  .shot { width: 800px; border-radius: 36px; border: 4px solid #FFFC00; box-shadow: 0 30px 80px rgba(255,252,0,.12); }
 `;
 const page = (inner) => `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body><div class="frame">${inner}</div></body></html>`;
 
@@ -57,6 +59,10 @@ function render(s) {
       return page(`<div class="hero">👻 ${esc(s.big)}</div><div class="big" style="font-size:96px">${esc(s.sub)}</div>`);
     case "terminal":
       return page(`<div class="kicker">${esc(s.kicker)}</div><div class="term">${colorize(s.code)}</div><div class="cap"><span>${esc(s.caption)}</span></div>`);
+    case "list":
+      return page(`<div class="kicker">${esc(s.kicker)}</div>${s.lines.map((l) => `<div class="line">${esc(l)}</div>`).join("")}<div class="cap"><span>${esc(s.caption)}</span></div>`);
+    case "shot":
+      return page(`<div class="kicker">${esc(s.kicker)}</div><img class="shot" src="${esc(path.resolve(WORK, s.image))}"><div class="cap"><span>${esc(s.caption)}</span></div>`);
     case "outro":
       return page(`<div class="big">👻 ${esc(s.big)}<br><em>${esc(s.sub)}</em></div><div class="cta">${esc(s.cta)}</div><div class="tag">${esc(s.tag)}</div>`);
     default:
