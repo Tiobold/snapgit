@@ -1,4 +1,4 @@
-import { FUSE_MS, parseRepo, isPrId, mergesAt, clock, parseDiff } from './lib/core.js';
+import { fuseOf, parseRepo, isPrId, mergesAt, clock, parseDiff } from './lib/core.js';
 import { GitHubBackend, DemoBackend, demoRecord } from './lib/backends.js';
 
 const $ = (id) => document.getElementById(id);
@@ -58,8 +58,8 @@ function render() {
   show('bar', fuseOn);
   if (fuseOn) {
     $('clock').textContent = clock(left);
-    $('fuse').classList.toggle('hot', left < 15_000 && !over);
-    $('bar-fill').style.width = `${Math.max(0, Math.min(100, (left / FUSE_MS) * 100))}%`;
+    $('fuse').classList.toggle('hot', left < Math.min(15_000, fuseOf(record) / 4) && !over);
+    $('bar-fill').style.width = `${Math.max(0, Math.min(100, (left / fuseOf(record)) * 100))}%`;
   }
 
   const canRead = mine() && !over && !rejectedInTime;

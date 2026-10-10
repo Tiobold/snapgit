@@ -75,12 +75,24 @@
     "id": "scene08",
     "kind": "terminal",
     "kicker": "Pull requests",
-    "code": "$ snapgit pr send -r origin\n📨 sent \"Fix login\" (wip/login -> main), 1 CI check passed\n\n$ snapgit pr open d37dd68f\n⏳ the fuse is lit: wip/login merges into main in 1m unless you run: snapgit pr reject d37dd68f",
-    "caption": "CI runs. 60s fuse. One button.",
-    "narration": "Send a pull request, and C I runs first. Then someone opens it, and a sixty second fuse is lit. They can read every changed line. They get one button: reject."
+    "code": "$ snapgit pr send -r origin\n📨 sent \"Fix login\" (wip/login -> main), 1 CI check passed\n   id 7d77cb77, 1 changed line = a 15s fuse\n\n$ snapgit pr open 7d77cb77\n⏳ the fuse is lit: wip/login merges into main in 15s unless you run: snapgit pr reject 7d77cb77",
+    "caption": "CI runs. Fuse lit. One button.",
+    "narration": "Send a pull request, and C I runs first. Then someone opens it, and a fuse is lit. They can read every changed line. They get one button: reject."
   },
   {
     "id": "scene09",
+    "kind": "list",
+    "kicker": "The fuse scales",
+    "lines": [
+      "1 line: 15 seconds.",
+      "100 lines: 1 minute.",
+      "30,000 lines: 1 hour."
+    ],
+    "caption": "Bigger PR. Longer fuse.",
+    "narration": "And the fuse scales with the size of the change. A one line fix gets fifteen seconds. A hundred lines, a minute. A thirty thousand line monster? An hour."
+  },
+  {
+    "id": "scene10",
     "kind": "shot",
     "kicker": "Or in your browser",
     "image": "assets/web-phone.png",
@@ -88,15 +100,15 @@
     "narration": "Prefer a browser? Same thing, on the web. Open it, read the diff, and watch the clock."
   },
   {
-    "id": "scene10",
+    "id": "scene11",
     "kind": "terminal",
     "kicker": "Nobody rejects it",
-    "code": "(61 seconds later)\n$ snapgit sweep -r origin\n🔀 PR d37dd68f: nobody rejected it, so wip/login merged into main (1 CI check passed) and was pushed\n👻 ghosted wip/login (was 30e2104). Undo: git branch wip/login 30e2104",
+    "code": "(15 seconds later)\n$ snapgit sweep -r origin\n🔀 PR 7d77cb77: nobody rejected it, so wip/login merged into main (1 CI check passed) and was pushed\n👻 ghosted wip/login (was cf1a10c, remote too). Undo: git branch wip/login cf1a10c",
     "caption": "It merges. No queue.",
     "narration": "Nobody rejects it? It merges. No queue. No waiting."
   },
   {
-    "id": "scene11",
+    "id": "scene12",
     "kind": "terminal",
     "kicker": "Fails CI?",
     "code": "$ snapgit pr send wip/ai-login\n😬 not sent: wip/ai-login failed CI before anyone had to look at it (\"tests\" exited 1)\n   CI said no. The branch has left the building. PR 67aab67a \"AI login rewrite\" failed the \"tests\" check (exit 1). Shame on: Claudio, Claude Sonnet (agent). wip/ai-login is self-destructing. Fix it and send it again.\n   | FAIL login.test.js: login() returned undefined\n👻 ghosted wip/ai-login (was 09313a6). Undo: git branch wip/ai-login 09313a6",
@@ -104,7 +116,7 @@
     "narration": "And when the A I's code fails C I? The authors get shamed. Human or agent. Then the branch self destructs."
   },
   {
-    "id": "scene12",
+    "id": "scene13",
     "kind": "terminal",
     "kicker": "Because why not",
     "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   10b4462  Merge wip/login into main  (origin/main)\n   4a649a8  init  (no branch tip)\n   30e2104  fix login  (no branch tip)\n   🔥 1 day streak\n   (this story will not be saved)",
@@ -112,7 +124,7 @@
     "narration": "Yes, there are commit streaks. And stories that disappear. Because why not."
   },
   {
-    "id": "scene13",
+    "id": "scene14",
     "kind": "outro",
     "big": "No servers.",
     "sub": "No waiting.",

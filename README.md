@@ -30,16 +30,29 @@ so `git branch <name> <sha>` brings it back (until git gc).
 
 ```
 snapgit pr send feat -m "Add feature\nlook at this" -r origin   # ask for a merge; puts the branch on the clock
-snapgit pr open <id> -r origin                                  # view the changed code; lights a 60 second fuse
+snapgit pr open <id> -r origin                                  # view the changed code; lights a fuse sized to the change
 snapgit pr reject <id> -m "no" -r origin                        # the only button there is
 snapgit pr ls -r origin                                         # live PRs
 snapgit pr burn <id> -r origin                                  # sender withdraws it (nothing merges)
 snapgit watch -r origin                                         # keep sweeping so fuses burn on time
 ```
 
-There is no approve. A PR can only be rejected. **It merges 60 seconds after it is first opened unless rejected**, or, if nobody
+There is no approve. A PR can only be rejected. **It merges one fuse after it is first opened unless rejected**, or, if nobody
 ever opens it, when its branch expires, whichever comes first. The opener can re-read the changed code until the fuse runs out;
 nobody else can open it (they can still reject). The branch deadline can't be moved.
+
+**The fuse is proportional to the size of the change**: `10s + 0.5s per changed line`, at least 15s and at most 1h. So a one-line
+fix gets 15 seconds, 100 lines get a minute, 500 lines get 4m 20s, and a 30,000 line PR gets the one-hour ceiling. It is computed
+when the PR is sent and stored in the PR, so the CLI and the web UI always agree. Tune it per repo:
+
+```
+git config snapgit.fuseSecPerLine 1     # seconds per changed line (default 0.5)
+git config snapgit.fuseBaseSec 10       # fixed part (default 10)
+git config snapgit.fuseMinSec 15        # floor (default 15)
+git config snapgit.fuseMaxSec 3600      # ceiling (default 3600)
+```
+
+(PRs sent by older versions have no stored fuse and keep a flat minute. Lines are added plus deleted; binary files count as zero.)
 
 The merge is done by the sender's machine: `snapgit sweep` (or `snapgit watch`, which sweeps every few seconds) sees the receipt,
 merges, and deletes the branch. The git hooks from `snapgit init` sweep offline, so they settle local PRs and leave PRs that
@@ -102,12 +115,12 @@ overrides the clock for time travel.
 
 ## The web interface
 
-`web/` is a static site for reviewing PRs in a browser (open, read the diff, 60 second countdown, reject), plus a demo
+`web/` is a static site for reviewing PRs in a browser (open, read the diff, size-based countdown, reject), plus a demo
 sandbox. It talks only to the GitHub API, so there is nothing to run. See `web/README.md` for the Vercel steps.
 
 ## The video
 
-`docs/video/snapgit-tiktok.mp4` is a 90 second 1080x1920 pitch (over a minute, which TikTok's creator monetization needs): leadership wants more AI, review is the bottleneck, GitHub keeps going down, snapgit's answer. Narration is Kokoro `am_michael` at 1.12x with compression and loudness normalisation (`VOICE=` and `SPEED=` override) for TikTok, built from `docs/video/scenes.json`: HTML slides,
+`docs/video/snapgit-tiktok.mp4` is a 99 second 1080x1920 pitch (over a minute, which TikTok's creator monetization needs): leadership wants more AI, review is the bottleneck, GitHub keeps going down, snapgit's answer. Narration is Kokoro `am_michael` at 1.12x with compression and loudness normalisation (`VOICE=` and `SPEED=` override) for TikTok, built from `docs/video/scenes.json`: HTML slides,
 headless Chromium screenshots, offline Kokoro narration, ffmpeg. The terminal slides are real captured output. Rebuild with
 `PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run
 downloads ~350 MB of voice models). Caption and hashtags: `docs/video/tiktok-caption.txt`. The outage figures come from

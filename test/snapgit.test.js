@@ -16,7 +16,9 @@ const git = (cwd, ...a) => {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim();
 };
-const snap = (cwd, args, at = T0) => sh(cwd, 'node', [BIN, ...args], { SNAPGIT_NOW: String(at) });
+// SNAPGIT_FUSE_MS pins the fuse so most tests can count in whole minutes; the proportional tests unset it.
+const snap = (cwd, args, at = T0, env = {}) => sh(cwd, 'node', [BIN, ...args], { SNAPGIT_NOW: String(at), SNAPGIT_FUSE_MS: '60000', ...env });
+const PROPORTIONAL = { SNAPGIT_FUSE_MS: '' };
 
 function repo(name = 'repo') {
   const dir = mkdtempSync(join(tmpdir(), `snapgit-${name}-`));
@@ -114,11 +116,11 @@ const sendId = (dir, ...extra) => {
 };
 const mainHas = (dir, file) => sh(dir, 'git', ['cat-file', '-e', `main:${file}`]).status === 0;
 
-test('sending a PR puts the branch on the clock; opening shows the changed code and lights a 60s fuse', () => {
+test('sending a PR puts the branch on the clock; opening shows the changed code and lights its fuse', () => {
   const dir = featureRepo();
   const sent = snap(dir, ['pr', 'send', '--ttl', '3h', '-m', 'Add feature\nplease look']);
   assert.equal(sent.status, 0, sent.stderr);
-  assert.match(sent.stdout, /60 seconds after it is first opened/);
+  assert.match(sent.stdout, /1 changed line = a 1m fuse: it merges into main that long after it is first opened/);
   const id = sent.stdout.match(/id ([0-9a-f]{8})/)[1];
   assert.match(snap(dir, ['ls']).stdout, /feat.*3h left/);
   assert.match(snap(dir, ['pr', 'ls']).stdout, /unopened/);
@@ -292,6 +294,62 @@ test('sending a PR for a branch that already has a timer cannot change that time
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /timers can never be changed/);
   assert.equal(snap(dir, ['pr', 'send']).status, 0); // without --ttl it just uses the existing timer
+});
+
+function branchWithLines(dir, name, n) {
+  git(dir, 'switch', '-q', '-c', name, 'main');
+  writeFileSync(join(dir, `${name}.txt`), 'x\n'.repeat(n));
+  git(dir, 'add', '.');
+  assert.equal(sh(dir, 'git', ['commit', '-q', '-m', `${n} lines`]).status, 0);
+  git(dir, 'switch', '-q', 'main');
+}
+const sendProp = (dir, name) => {
+  const r = snap(dir, ['pr', 'send', name, '--ttl', '9h'], T0, PROPORTIONAL);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  return { id: r.stdout.match(/id ([0-9a-f]{8})/)[1], out: r.stdout };
+};
+
+test('the fuse is proportional to the size of the change: 15s floor, ~half a second a line, 1h ceiling', () => {
+  const dir = repo();
+  for (const [n, fuse] of [[1, '15s'], [100, '1m'], [500, '4m 20s'], [30000, '1h']]) {
+    branchWithLines(dir, `size${n}`, n);
+    const { out } = sendProp(dir, `size${n}`);
+    assert.match(out, new RegExp(`${n} changed lines? = a ${fuse} fuse`), `${n} lines`);
+  }
+});
+
+test('the fuse ratio is configurable per repo', () => {
+  const dir = repo();
+  git(dir, 'config', 'snapgit.fuseSecPerLine', '2');
+  git(dir, 'config', 'snapgit.fuseBaseSec', '0');
+  branchWithLines(dir, 'cfg', 10);
+  assert.match(sendProp(dir, 'cfg').out, /10 changed lines = a 20s fuse/);
+  git(dir, 'config', 'snapgit.fuseMaxSec', '30');
+  branchWithLines(dir, 'cfg2', 100);
+  assert.match(sendProp(dir, 'cfg2').out, /a 30s fuse/); // capped
+});
+
+test('a big PR gets a long fuse: it does not merge a minute after opening, only when its own fuse burns out', () => {
+  const dir = repo();
+  branchWithLines(dir, 'big', 500); // 260s fuse
+  const { id } = sendProp(dir, 'big');
+  const opened = snap(dir, ['pr', 'open', id, '--screenshot'], T0, PROPORTIONAL);
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.match(opened.stdout, /merges into main in 4m 20s/);
+  assert.doesNotMatch(snap(dir, ['sweep'], T0 + 61_000, PROPORTIONAL).stdout, /merged/);
+  assert.ok(!mainHas(dir, 'big.txt'));
+  assert.match(snap(dir, ['pr', 'ls'], T0 + 200_000, PROPORTIONAL).stdout, /merges in 1m/);
+  assert.match(snap(dir, ['sweep'], T0 + 261_000, PROPORTIONAL).stdout, /big merged into main/);
+  assert.ok(mainHas(dir, 'big.txt'));
+});
+
+test('a tiny PR gets a short fuse and merges in 15 seconds', () => {
+  const dir = repo();
+  branchWithLines(dir, 'tiny', 1);
+  const { id } = sendProp(dir, 'tiny');
+  snap(dir, ['pr', 'open', id, '--screenshot'], T0, PROPORTIONAL);
+  assert.doesNotMatch(snap(dir, ['sweep'], T0 + 14_000, PROPORTIONAL).stdout, /merged/);
+  assert.match(snap(dir, ['sweep'], T0 + 16_000, PROPORTIONAL).stdout, /tiny merged into main/);
 });
 
 function remotes() {

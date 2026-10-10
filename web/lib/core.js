@@ -1,7 +1,8 @@
 // Pure logic shared by the UI and the tests. No DOM, no network.
 
-/** How long a reviewer has to reject once they have opened a PR. Matches the CLI. */
+/** The fuse for PRs that predate size-proportional fuses. Newer PRs carry their own `fuseMs`. */
 export const FUSE_MS = 60_000;
+export const fuseOf = (record) => record.fuseMs ?? FUSE_MS;
 
 /** "owner/repo", "github.com/owner/repo" or a full URL (with .git) -> { owner, repo } | null. */
 export function parseRepo(input) {
@@ -11,14 +12,16 @@ export function parseRepo(input) {
 
 export const isPrId = (id) => /^[0-9a-f]{8}$/.test(String(id).trim().toLowerCase());
 
-/** Milliseconds until the PR merges: fuse after opening, or the branch deadline, whichever is first. */
+/** The moment the PR merges: its fuse after opening, or the branch deadline, whichever is first. */
 export function mergesAt(record, receipt) {
-  return Math.min(record.expiresAt, receipt ? receipt.openedAt + FUSE_MS : Infinity);
+  return Math.min(record.expiresAt, receipt ? receipt.openedAt + fuseOf(record) : Infinity);
 }
 
 export function clock(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(h ? 2 : 1, '0');
+  return `${h ? `${h}:` : ''}${mm}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /** Unified diff text -> [{ name, lines: [{ kind: 'add'|'del'|'ctx'|'hunk'|'meta', text }] }]. */

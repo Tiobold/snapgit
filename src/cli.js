@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import { hasRemote, run } from './git.js';
 import { parseDuration, formatDuration, now } from './time.js';
 import { createSnap, listSnaps, sweep, defaultTtlMs } from './snaps.js';
-import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, previewChecks, listShame, clearShame, fuseMs } from './pr.js';
+import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, previewChecks, listShame, clearShame, fuseOf } from './pr.js';
 import { streak } from './streak.js';
 import { story } from './story.js';
 import { installHooks } from './hooks.js';
@@ -145,7 +145,7 @@ const COMMANDS = {
     for (const b of s.snaps) out(`   ⏳ ${b.name} vanishes in ${formatDuration(b.expiresAt - now())}`);
     for (const p of s.prs) {
       const rc = receiptFor(p.id, cwd);
-      const due = Math.min(p.expiresAt, rc ? rc.openedAt + fuseMs() : Infinity);
+      const due = Math.min(p.expiresAt, rc ? rc.openedAt + fuseOf(p) : Infinity);
       out(`   📨 PR ${p.id} "${p.title}" merges into ${p.base} in ${formatDuration(due - now())} unless rejected`);
     }
     out(`   🔥 ${s.streak.current} day streak`);
@@ -177,7 +177,7 @@ const COMMANDS = {
       }
       const rec = sent.pr;
       out(`📨 sent "${rec.title}" (${rec.head} -> ${rec.base})${sent.ran ? `, ${sent.ran} CI check${sent.ran > 1 ? 's' : ''} passed` : ''}`);
-      out(`   id ${rec.id}, 60 seconds after it is first opened (or at ${when(rec.expiresAt)}), it merges into ${rec.base} unless rejected`);
+      out(`   id ${rec.id}, ${rec.lines} changed line${rec.lines === 1 ? '' : 's'} = a ${formatDuration(rec.fuseMs)} fuse: it merges into ${rec.base} that long after it is first opened (or at ${when(rec.expiresAt)}) unless rejected`);
       out(remote ? `   recipient: snapgit pr open ${rec.id} -r ${remote}   (or snapgit pr reject ${rec.id} -r ${remote})` : `   not pushed anywhere yet; use --remote <name> to deliver it`);
       return;
     }
@@ -206,7 +206,7 @@ const COMMANDS = {
       const local = listLocalPrs(cwd);
       for (const r of local) {
         const rc = receiptFor(r.id, cwd);
-        const due = Math.min(r.expiresAt, rc ? rc.openedAt + fuseMs() : Infinity);
+        const due = Math.min(r.expiresAt, rc ? rc.openedAt + fuseOf(r) : Infinity);
         const left = due - now();
         out(`${r.id}  ${r.title}  (${r.head} -> ${r.base}, ${rc ? `opened by ${rc.opener}` : 'unopened'}, ${left > 0 ? `merges in ${formatDuration(left)}` : 'merging at next sweep'} unless rejected)`);
       }

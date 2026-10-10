@@ -28,13 +28,39 @@ const remoteHas = (remote, ref, cwd) => {
 };
 const viaFor = (record, remote, cwd) => remote || (record?.remote && hasRemote(record.remote, cwd) ? record.remote : null);
 
-/** How long a reviewer has to reject once they have opened a PR. SNAPGIT_FUSE_MS overrides (tests, demos). */
-export const fuseMs = () => Number(process.env.SNAPGIT_FUSE_MS || 60_000);
+/**
+ * The fuse is proportional to the size of the change: base + perLine * changedLines, clamped to [min, max].
+ * Defaults: 10s + 0.5s per changed line, at least 15s and at most 1h, so a typo gets 15 seconds, a 100 line
+ * change gets a minute, and a 30,000 line PR gets the maximum hour (and a stern look). Tune per repo with
+ * git config snapgit.fuseBaseSec / fuseSecPerLine / fuseMinSec / fuseMaxSec. SNAPGIT_FUSE_MS pins it (tests, demos).
+ */
+export function computeFuseMs(lines, cwd) {
+  if (process.env.SNAPGIT_FUSE_MS) return Number(process.env.SNAPGIT_FUSE_MS);
+  const cfg = (key, dflt) => {
+    const r = run(['config', `snapgit.${key}`], { cwd });
+    const n = Number(r.ok ? r.out.trim() : '');
+    return r.ok && r.out.trim() && Number.isFinite(n) && n >= 0 ? n : dflt;
+  };
+  const raw = cfg('fuseBaseSec', 10) + cfg('fuseSecPerLine', 0.5) * lines;
+  return Math.round(Math.min(cfg('fuseMaxSec', 3600), Math.max(cfg('fuseMinSec', 15), raw)) * 1000);
+}
+
+/** A PR's own fuse. PRs created before fuses scaled have none stored and keep the old flat minute. */
+export const fuseOf = (record) => record.fuseMs ?? 60_000;
+
+/** Lines changed (added + deleted) between base and head. Binary files count as zero. */
+function changedLines(base, head, cwd) {
+  const out = git(['diff', '--numstat', `${base}...${head}`], { cwd });
+  return out.split('\n').filter(Boolean).reduce((sum, l) => {
+    const [a, d] = l.split('\t');
+    return sum + (Number(a) || 0) + (Number(d) || 0);
+  }, 0);
+}
 
 /**
  * A PR is a JSON blob under refs/snapgit/pr/<id>. It has exactly one outcome: someone rejects it, or
- * it merges. It merges fuseMs after somebody first opens it, or when its head branch expires,
- * whichever comes first. Sending a PR puts the branch on the clock.
+ * it merges. It merges one fuse (sized to the change, see computeFuseMs) after somebody first opens it,
+ * or when its head branch expires, whichever comes first. Sending a PR puts the branch on the clock.
  */
 export function createPr({ cwd, head, base, message, ttlMs, remote }) {
   head ||= currentBranch(cwd);
@@ -50,18 +76,21 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
     expiresAt = now() + (ttlMs ?? defaultTtlMs(cwd));
     setExpiry(head, expiresAt, cwd);
   }
-  const lines = (message || '').split('\n');
+  const lines = changedLines(base, head, cwd);
+  const text = (message || '').split('\n');
   const record = {
     v: 2,
     id: randomBytes(4).toString('hex'),
-    title: lines[0] || git(['log', '-1', '--format=%s', head], { cwd }),
-    message: lines.slice(1).join('\n').trim(),
+    title: text[0] || git(['log', '-1', '--format=%s', head], { cwd }),
+    message: text.slice(1).join('\n').trim(),
     author: ident(cwd),
     base,
     head,
     remote: remote || null,
     createdAt: now(),
     expiresAt,
+    lines,
+    fuseMs: computeFuseMs(lines, cwd),
     commits: git(['log', '--format=%h %s', `${base}..${head}`], { cwd }).split('\n').filter(Boolean),
     stat: git(['diff', '--no-color', '--stat', `${base}...${head}`], { cwd }),
     patch: patch + '\n',
@@ -120,7 +149,7 @@ export function burnPr(id, { cwd, remote }) {
 
 /**
  * Open a PR. The first opener claims a receipt ref (a create-only push, so only one racer wins) and that
- * starts the fuse: the PR merges fuseMs later unless rejected. The opener may re-read the changed code
+ * starts the fuse: the PR merges one fuse later unless rejected. The opener may re-read the changed code
  * until then; nobody else may.
  */
 export function openPr(id, { cwd, remote, screenshot = false }) {
@@ -146,7 +175,7 @@ export function openPr(id, { cwd, remote, screenshot = false }) {
   let receipt = readRef(rref, cwd)?.data;
   if (receipt) {
     if (receipt.opener !== me) throw new Error(`PR ${id} is already being reviewed by ${receipt.opener}`);
-    if (receipt.openedAt + fuseMs() <= now()) throw new Error(`PR ${id}: the fuse burned out. It is merging`);
+    if (receipt.openedAt + fuseOf(record) <= now()) throw new Error(`PR ${id}: the fuse burned out. It is merging`);
   } else {
     if (record.expiresAt <= now()) throw new Error(`PR ${id} is past its deadline and about to merge. Too late to open it`);
     receipt = { id, title: record.title, sender: record.author, opener: me, openedAt: now(), screenshot };
@@ -160,7 +189,7 @@ export function openPr(id, { cwd, remote, screenshot = false }) {
     run(['update-ref', '-d', ref], { cwd }); // a recipient keeps nothing; re-open fetches it again
     if (via) run(['update-ref', '-d', rref], { cwd });
   }
-  return { record, receipt, mergesAt: Math.min(record.expiresAt, receipt.openedAt + fuseMs()) };
+  return { record, receipt, mergesAt: Math.min(record.expiresAt, receipt.openedAt + fuseOf(record)) };
 }
 
 export const deadline = (record) => `${new Date(record.expiresAt).toISOString().replace('T', ' ').slice(0, 16)}Z`;
@@ -289,7 +318,7 @@ export function clearShame({ cwd, remote }) {
 
 /**
  * Settle every PR that is due: rejected ones are dropped, the rest are merged. A PR is due when its fuse
- * (opened + fuseMs) or its branch timer runs out. Doubt never destroys work: anything that can't be
+ * (opened + its fuse) or its branch timer runs out. Doubt never destroys work: anything that can't be
  * merged or verified is reported as held. With offline, PRs that live on a remote are left alone.
  * A PR whose CI checks fail is not merged: its authors are shamed and its branch self-destructs.
  * Returns { events, gone: Set<branch> (to delete now), held: Map<branch, reason> }.
@@ -314,7 +343,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       if (r === 'present') run(['fetch', '--quiet', via, `+${cref}:${cref}`], { cwd });
     }
     const receipt = readRef(cref, cwd)?.data;
-    const due = Math.min(expiry, receipt ? receipt.openedAt + fuseMs() : Infinity);
+    const due = Math.min(expiry, receipt ? receipt.openedAt + fuseOf(rec) : Infinity);
     if (due > now()) continue;
 
     if (via) {

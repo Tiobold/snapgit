@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRepo, isPrId, mergesAt, clock, parseDiff, FUSE_MS } from '../web/lib/core.js';
+import { parseRepo, isPrId, mergesAt, clock, parseDiff, fuseOf, FUSE_MS } from '../web/lib/core.js';
 import { DemoBackend, demoRecord } from '../web/lib/backends.js';
 
 test('parseRepo accepts the usual spellings', () => {
@@ -25,11 +25,20 @@ test('mergesAt matches the CLI: fuse after opening, or the branch deadline, whic
   assert.equal(FUSE_MS, 60_000);
 });
 
+test('each PR carries its own fuse; PRs from before fuses scaled fall back to a minute', () => {
+  assert.equal(fuseOf({ fuseMs: 260_000 }), 260_000);
+  assert.equal(fuseOf({}), 60_000);
+  const record = { expiresAt: 10_000_000, fuseMs: 260_000 };
+  assert.equal(mergesAt(record, { openedAt: 1_000_000 }), 1_260_000);
+});
+
 test('clock formats countdowns and never goes negative', () => {
   assert.equal(clock(60_000), '1:00');
   assert.equal(clock(59_001), '1:00');
   assert.equal(clock(9_000), '0:09');
   assert.equal(clock(-5), '0:00');
+  assert.equal(clock(3_600_000), '1:00:00');
+  assert.equal(clock(3_725_000), '1:02:05');
 });
 
 test('parseDiff splits files and classifies lines', () => {

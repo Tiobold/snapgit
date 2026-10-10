@@ -19,7 +19,7 @@ only to `api.github.com`), which the browser test also runs under.
 ## How it works
 
 - **Open** claims `refs/snapgit/receipt/<id>` by creating it. GitHub refuses to create a ref that exists, so only the first
-  opener wins, same as the CLI's create-only push. That receipt's timestamp starts the 60 second fuse.
+  opener wins, same as the CLI's create-only push. That receipt's timestamp starts the size-proportional fuse.
 - **Reject** creates `refs/snapgit/reject/<id>`. Anyone with write access can, opened or not.
 - The page only *shows* the changes to whoever holds the receipt, and polls so a rejection from anywhere shows up.
 - The merge itself is done by the sender's machine (`snapgit sweep --remote origin` or `snapgit watch`), not by the web page.
