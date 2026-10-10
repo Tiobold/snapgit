@@ -1,0 +1,134 @@
+[
+  {
+    "id": "scene01",
+    "kind": "title",
+    "title": "snapgit",
+    "subtitle": "GitHub, but disappearing is a feature.",
+    "narration": "Introducing snapgit. Git meets Snapchat. Because if your code is going to vanish, it should at least be on purpose."
+  },
+  {
+    "id": "scene02",
+    "kind": "bullets",
+    "title": "Lately, GitHub has been disappearing on its own",
+    "items": [
+      "Aug 6: Actions and Pages, queued jobs, impact around 10 hours",
+      "Aug 17: roughly 20% errors on web and API, 50% on archive downloads",
+      "Oct 7: webhooks, Actions and pull requests degraded"
+    ],
+    "narration": "Lately, GitHub has been disappearing on its own. On August sixth, queued Actions jobs and throttled webhooks, with impact lasting around ten hours. On August seventeenth, roughly twenty percent errors on the website and A P I, and fifty percent on archive downloads. And on October seventh, webhooks, Actions and pull requests were degraded again."
+  },
+  {
+    "id": "scene03",
+    "kind": "stats",
+    "title": "The scoreboard",
+    "stats": [
+      [
+        "257",
+        "incidents tracked in 12 months"
+      ],
+      [
+        "48",
+        "of them major"
+      ],
+      [
+        "37",
+        "in February 2026 alone"
+      ]
+    ],
+    "note": "IncidentHub, May 2025 to April 2026",
+    "narration": "One tracker counted two hundred fifty seven incidents in twelve months, forty eight of them major. February twenty twenty six alone had thirty seven."
+  },
+  {
+    "id": "scene04",
+    "kind": "quote",
+    "title": "",
+    "quote": "Your code was going to disappear anyway.",
+    "sub": "Now you get to pick when.",
+    "narration": "Here is the thing. Your work was always going to disappear at some point. snapgit just lets you pick when."
+  },
+  {
+    "id": "scene05",
+    "kind": "terminal",
+    "title": "Disappearing branches",
+    "code": "$ snapgit snap wip/hot-take --ttl 2h\n📸 wip/hot-take will disappear in 2h (2026-10-10 20:03Z). Commit fast.\n\n$ snapgit ls\nwip/hot-take                   c3edc4e  2h left",
+    "narration": "Start a branch with a self destruct timer. Two hours, then it's gone. A real git branch, with a real countdown."
+  },
+  {
+    "id": "scene06",
+    "kind": "terminal",
+    "title": "Gone. Locally and on the remote.",
+    "code": "$ snapgit extend wip/hot-take 1h\n⏳ wip/hot-take now disappears 2026-10-10 21:03Z\n\n(four hours later)\n$ snapgit sweep --remote origin\n👻 ghosted wip/hot-take (was c3edc4e, remote too). Undo: git branch wip/hot-take c3edc4e",
+    "narration": "Need more time? Extend it. Otherwise, the sweep ghosts the branch, on your machine and on the remote, and hands you the commit hash in case you regret it. Hooks make it automatic."
+  },
+  {
+    "id": "scene07",
+    "kind": "terminal",
+    "title": "View-once pull requests",
+    "code": "$ snapgit pr send -m \"Fix login\" -r origin\n📨 sent \"Fix login\" (fix/login -> main)\n   id 6e844516, view once, expires 2026-10-11 18:03Z\n   recipient: snapgit pr open 6e844516 -r origin\n$ snapgit pr open 6e844516\nFix login   #6e844516, view once\n  09bdb02 fix login\n+export const login = () => \"ok\";\n💥 this PR has self-destructed. You will not see it again.",
+    "narration": "Pull requests that open exactly once. The recipient reads it, and it burns on the remote before they see a single line."
+  },
+  {
+    "id": "scene08",
+    "kind": "terminal",
+    "title": "Gone. Read receipts included.",
+    "code": "$ snapgit pr open 6e844516\nsnapgit: PR 6e844516 is gone (burned, expired, or never existed)\n\n$ snapgit pr receipts\n👀 Alice <alice@example.com> opened \"Fix login\" (#6e844516) at 2026-10-10 18:03Z\nreceipts shown once, now deleted",
+    "narration": "Try to open it again, and it's gone. If two people race, only one wins. And of course there are read receipts: you find out who opened your PR, and whether they took a screenshot."
+  },
+  {
+    "id": "scene09",
+    "kind": "terminal",
+    "title": "Streaks. Stories.",
+    "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   09bdb02  fix login  (origin/fix/login)\n   d1c3543  init  (origin/main, main)\n   🔥 1 day streak\n   (this story will not be saved)",
+    "narration": "Then your streak, and your story: your last day in git, which will not be saved."
+  },
+  {
+    "id": "scene10",
+    "kind": "bullets",
+    "title": "Under the hood, it's just git",
+    "items": [
+      "PRs are blobs in refs/snapgit, burned with one atomic push --delete",
+      "Timers live in your git config; hooks sweep for you",
+      "Zero dependencies. Node 20 and git",
+      "No servers, so there is nothing to take down"
+    ],
+    "narration": "Under the hood, it's just git. Pull requests are blobs in a private ref, burned with one atomic delete. Timers live in your git config. Zero dependencies, and no servers, so there is nothing for us to take down."
+  },
+  {
+    "id": "scene11",
+    "kind": "twocol",
+    "title": "Downtime, compared",
+    "colA_title": "GitHub",
+    "colA_body": "Disappears unexpectedly\nUnscheduled\nFor hours",
+    "colB_title": "snapgit",
+    "colB_body": "Disappears on purpose\nScheduled, by you\nFor as long as you said",
+    "narration": "The difference? GitHub disappears unexpectedly. snapgit disappears on purpose, on a schedule you chose."
+  },
+  {
+    "id": "scene12",
+    "kind": "outro",
+    "title": "",
+    "subtitle": "Try snapgit",
+    "items": [
+      "git clone github.com/Tiobold/snapgit",
+      "npm link",
+      "snapgit snap wip/idea --ttl 2h"
+    ],
+    "footer": "Hosted on GitHub. We know.",
+    "narration": "Try snapgit. Clone it, link it, and start a branch with a timer. It's hosted on GitHub. We know."
+  },
+  {
+    "id": "scene13",
+    "kind": "sources",
+    "title": "Sources",
+    "items": [
+      "blog.incidenthub.cloud: GitHub reliability and outage history 2025 to 2026",
+      "blog.incidenthub.cloud: The August 6, 2026 GitHub Actions outage",
+      "bleepingcomputer.com: Microsoft confirms GitHub is down worldwide",
+      "theregister.com: GitHub appears to be struggling with three nines availability",
+      "androidauthority.com: GitHub outage, October 2026",
+      "opensourceforu.com: GitHub outage hits repositories, Actions and API"
+    ],
+    "note": "Figures come from press and third-party trackers. See GitHub's own availability reports for official numbers.",
+    "narration": "Outage figures come from press and third party trackers. See GitHub's own availability reports for the official numbers."
+  }
+]

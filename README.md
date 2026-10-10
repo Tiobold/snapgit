@@ -35,15 +35,30 @@ A PR is a JSON blob (message, commits, stat, full patch) in a private ref, so an
 deletes the ref on the remote *before* showing you anything. `git push --delete` succeeds for exactly one person, so if
 two people race, one gets the PR and the other gets "already burned". The sender's own copy dies with it. PRs also expire
 unopened (default 24h). Piping the output (a screenshot, in spirit) is refused without burning, unless you pass
-`--screenshot`, which opens it anyway and tells you it noticed. Nobody is notified. We have no servers.
+`--screenshot`, which opens it anyway and records that you took one.
 
 Honest caveat: burning removes the ref, not the bytes. The blob lingers as an unreachable object until git gc prunes it.
 
-## Streaks
+## Read receipts
+
+Opening a PR also writes a receipt (`refs/snapgit/receipt/<id>`) saying who opened it, when, and whether they screenshotted.
+`snapgit pr receipts` shows the receipts for PRs you sent, then deletes them. Receipts addressed to other people are never
+shown or deleted by you. Opening a PR you sent yourself clears your stale local copy once its receipt arrives.
+
+## Streaks and stories
 
 `snapgit streak` counts consecutive days with a commit by you, across all branches. Commit yesterday and you're still alive.
+`snapgit story [--since 24h]` summarises your last day: commits, branches on the clock, pending PRs. It is not saved anywhere.
 
 ## Tests
 
 `npm test` runs against real temporary repos, including two clones racing to open the same PR. `SNAPGIT_NOW` (epoch ms)
 overrides the clock for time travel.
+
+## The video
+
+`docs/video/snapgit.mp4` is a two-minute pitch built from `docs/video/scenes.json` with the same pipeline as the
+SecondBrainClaude walkthrough: HTML slides, headless Chromium screenshots, offline Kokoro narration, ffmpeg.
+The terminal slides are real captured output. Rebuild with
+`PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run downloads
+~350 MB of voice models). The outage figures come from press and third-party trackers, listed on the last slide.

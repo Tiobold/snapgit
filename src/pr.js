@@ -3,6 +3,7 @@ import { git, run, currentBranch, defaultBranch, hasRemote } from './git.js';
 import { now } from './time.js';
 
 const PREFIX = 'refs/snapgit/pr/';
+const RECEIPTS = 'refs/snapgit/receipt/';
 const ID = /^[0-9a-f]{8}$/;
 const refOf = (id) => {
   if (!ID.test(id)) throw new Error(`"${id}" is not a snapgit PR id (8 hex characters)`);
@@ -65,7 +66,7 @@ export function listRemotePrIds(remote, cwd) {
  * remote it is the atomic step: whoever's `push --delete` succeeds owns the only copy.
  * Throws if the PR is gone. Returns { record, expired }.
  */
-export function openPr(id, { cwd, remote }) {
+export function openPr(id, { cwd, remote, screenshot = false }) {
   const ref = refOf(id);
   let local = readLocal(id, cwd);
   if (!local && remote) {
@@ -87,7 +88,49 @@ export function openPr(id, { cwd, remote }) {
     throw new Error(`PR ${id} was already burned`);
   }
 
-  return { record: local.record, expired: local.record.expiresAt <= now() };
+  const expired = local.record.expiresAt <= now();
+  if (!expired) writeReceipt(local.record, { cwd, via, screenshot });
+  return { record: local.record, expired };
+}
+
+/** A read receipt: a second burn-after-reading ref that tells the sender who opened their PR. */
+function writeReceipt(record, { cwd, via, screenshot }) {
+  const receipt = {
+    id: record.id,
+    title: record.title,
+    sender: record.author,
+    opener: `${run(['config', 'user.name'], { cwd }).out.trim()} <${run(['config', 'user.email'], { cwd }).out.trim()}>`,
+    openedAt: now(),
+    screenshot,
+  };
+  const blob = git(['hash-object', '-w', '--stdin'], { cwd, input: JSON.stringify(receipt) });
+  const ref = RECEIPTS + record.id;
+  git(['update-ref', ref, blob], { cwd });
+  if (via) run(['push', via, `${ref}:${ref}`], { cwd });
+}
+
+/**
+ * Collect (and burn) receipts for PRs I sent. Receipts addressed to other people are left alone.
+ */
+export function collectReceipts({ cwd, remote }) {
+  if (remote) run(['fetch', '--quiet', remote, `+${RECEIPTS}*:${RECEIPTS}*`], { cwd });
+  const me = `${run(['config', 'user.name'], { cwd }).out.trim()} <${run(['config', 'user.email'], { cwd }).out.trim()}>`;
+  const mine = [];
+  const refs = run(['for-each-ref', '--format=%(refname) %(objectname)', RECEIPTS], { cwd }).out.split('\n').filter(Boolean);
+  for (const line of refs) {
+    const [ref, blob] = line.split(' ');
+    const receipt = JSON.parse(git(['cat-file', 'blob', blob], { cwd }));
+    if (receipt.sender !== me) {
+      // Not mine: drop my local copy only, the real one stays on the remote for its owner.
+      if (remote) run(['update-ref', '-d', ref], { cwd });
+      continue;
+    }
+    mine.push(receipt);
+    run(['update-ref', '-d', ref], { cwd });
+    run(['update-ref', '-d', PREFIX + receipt.id], { cwd }); // my own copy of the opened PR is now stale
+    if (remote) run(['push', remote, '--delete', ref], { cwd });
+  }
+  return mine.sort((a, b) => a.openedAt - b.openedAt);
 }
 
 /** Burn without reading (retract a PR you sent). */

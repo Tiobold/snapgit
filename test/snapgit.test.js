@@ -122,7 +122,7 @@ test('a PR can be opened exactly once, and carries the diff', () => {
   const second = snap(dir, ['pr', 'open', id, '--screenshot']);
   assert.notEqual(second.status, 0);
   assert.match(second.stderr, /gone/);
-  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit'), '');
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/pr'), '');
 });
 
 test('piping a PR without --screenshot refuses and does not burn it', () => {
@@ -173,7 +173,7 @@ test('over a remote only one recipient wins, and the sender cannot peek afterwar
   const s = snap(sender, ['pr', 'open', id, '--screenshot']);
   assert.notEqual(s.status, 0);
   assert.match(s.stderr, /already burned/);
-  assert.equal(git(bare, 'for-each-ref', 'refs/snapgit'), '');
+  assert.equal(git(bare, 'for-each-ref', 'refs/snapgit/pr'), '');
 });
 
 test('burn retracts a PR without reading it', () => {
@@ -194,4 +194,42 @@ test('streak counts consecutive days and survives until tomorrow', () => {
   assert.match(snap(dir, ['streak'], Date.UTC(2026, 0, 10, 20)).stdout, /4 day streak\./);
   assert.match(snap(dir, ['streak'], Date.UTC(2026, 0, 11, 9)).stdout, /4 day streak \(commit today/);
   assert.match(snap(dir, ['streak'], Date.UTC(2026, 0, 13, 9)).stdout, /no streak.*Longest ever: 4/);
+});
+
+test('read receipts tell the sender who opened the PR and whether they screenshotted, once', () => {
+  const bare = mkdtempSync(join(tmpdir(), 'snapgit-bare-'));
+  git(bare, 'init', '-q', '--bare', '-b', 'main');
+  const sender = featureRepo();
+  git(sender, 'remote', 'add', 'origin', bare);
+  git(sender, 'push', '-q', 'origin', 'main', 'feat');
+  const id = snap(sender, ['pr', 'send', '-r', 'origin', '-m', 'Receipt me']).stdout.match(/id ([0-9a-f]{8})/)[1];
+
+  const alice = mkdtempSync(join(tmpdir(), 'snapgit-alice-'));
+  git(alice, 'clone', '-q', bare, '.');
+  git(alice, 'config', 'user.name', 'Alice');
+  git(alice, 'config', 'user.email', 'alice@example.com');
+  assert.equal(snap(alice, ['pr', 'open', id, '--screenshot']).status, 0);
+
+  // Alice must not be able to read receipts addressed to the sender.
+  assert.match(snap(alice, ['pr', 'receipts']).stdout, /no new read receipts/);
+
+  const r = snap(sender, ['pr', 'receipts']);
+  assert.match(r.stdout, /Alice <alice@example.com> opened "Receipt me"/);
+  assert.match(r.stdout, /screenshot/);
+  assert.match(snap(sender, ['pr', 'receipts']).stdout, /no new read receipts/);
+  assert.match(snap(sender, ['pr', 'ls']).stdout, /no pending PRs/);
+  assert.equal(git(bare, 'for-each-ref', 'refs/snapgit/pr'), '');
+});
+
+test('story summarises the last day and ignores older commits', () => {
+  const dir = repo();
+  const day = Date.UTC(2026, 0, 10, 12);
+  commit(dir, 'old.txt', '1', 'ancient history', '2026-01-01T12:00:00Z');
+  commit(dir, 'new.txt', '2', 'fresh work', '2026-01-10T09:00:00Z');
+  snap(dir, ['snap', 'spike', '--ttl', '3h', '--stay'], day);
+  const out = snap(dir, ['story'], day).stdout;
+  assert.match(out, /fresh work/);
+  assert.doesNotMatch(out, /ancient history/);
+  assert.match(out, /spike vanishes in 3h/);
+  assert.match(out, /will not be saved/);
 });

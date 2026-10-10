@@ -2,8 +2,9 @@ import { parseArgs } from 'node:util';
 import { hasRemote, run } from './git.js';
 import { parseDuration, formatDuration, now } from './time.js';
 import { createSnap, listSnaps, setExpiry, getExpiry, clearExpiry, sweep } from './snaps.js';
-import { createPr, openPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs } from './pr.js';
+import { createPr, openPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts } from './pr.js';
 import { streak } from './streak.js';
+import { story } from './story.js';
 import { installHooks } from './hooks.js';
 
 const HELP = `snapgit: git, but it disappears
@@ -20,7 +21,10 @@ const HELP = `snapgit: git, but it disappears
   snapgit pr ls [--remote origin]                             unopened PRs
   snapgit pr burn <id> [--remote origin]                      retract without reading
 
+  snapgit pr receipts [--remote origin]                       who opened (or screenshotted) your PRs; read once
+
   snapgit streak                                              your commit streak
+  snapgit story [--since 24h]                                 your last day in git, then it's gone
 `;
 
 const paint = (code, s) => (process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -114,6 +118,19 @@ const COMMANDS = {
     out(installed.length ? `hooks installed: ${installed.join(', ')}. Expired branches now vanish on their own.` : 'hooks already installed');
   },
 
+  story(argv, cwd) {
+    const { values } = args(argv, { since: { type: 'string' } }, false);
+    const windowMs = parseDuration(values.since ?? '24h');
+    const s = story(cwd, windowMs);
+    out(`📖 your story, last ${formatDuration(windowMs)}`);
+    if (!s.commits.length && !s.snaps.length && !s.prs.length) return out('   nothing. Quiet day. It would have disappeared anyway.');
+    for (const c of s.commits) out(`   ${c.sha}  ${c.subject}  ${paint(2, `(${c.refs})`)}`);
+    for (const b of s.snaps) out(`   ⏳ ${b.name} vanishes in ${formatDuration(b.expiresAt - now())}`);
+    for (const p of s.prs) out(`   📨 PR ${p.id} "${p.title}" waiting, ${formatDuration(p.expiresAt - now())} left`);
+    out(`   🔥 ${s.streak.current} day streak`);
+    out('   (this story will not be saved)');
+  },
+
   streak(argv, cwd) {
     const s = streak(cwd);
     if (!s.current) return out(`💀 no streak. Longest ever: ${s.longest}. Commit something.`);
@@ -141,7 +158,7 @@ const COMMANDS = {
         throw new Error('stdout is not a terminal, which looks suspiciously like a screenshot. Nothing was burned. Pass --screenshot if you insist');
       }
       const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
-      const { record, expired } = openPr(positionals[0], { cwd, remote });
+      const { record, expired } = openPr(positionals[0], { cwd, remote, screenshot });
       if (expired) throw new Error(`PR ${record.id} expired before you opened it. It is gone now`);
       render(record, screenshot);
       return;
@@ -157,6 +174,16 @@ const COMMANDS = {
       if (!local.length && !values.remote) out('no pending PRs');
       return;
     }
+    if (sub === 'receipts') {
+      const { values } = args(rest, remoteOpt, false);
+      const receipts = collectReceipts({ cwd, remote: values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined) });
+      if (!receipts.length) return out('no new read receipts');
+      for (const r of receipts) {
+        out(`👀 ${r.opener} opened "${r.title}" (#${r.id}) at ${when(r.openedAt)}${r.screenshot ? ' 📸 and took a screenshot' : ''}`);
+      }
+      out('receipts shown once, now deleted');
+      return;
+    }
     if (sub === 'burn') {
       const { values, positionals } = args(rest, remoteOpt);
       if (positionals.length !== 1) throw new Error('usage: snapgit pr burn <id>');
@@ -164,7 +191,7 @@ const COMMANDS = {
       out('🔥 burned');
       return;
     }
-    throw new Error('usage: snapgit pr <send|open|ls|burn>');
+    throw new Error('usage: snapgit pr <send|open|ls|receipts|burn>');
   },
 };
 
@@ -186,5 +213,5 @@ function render(r, screenshot) {
   }
   out(paint(35, bar));
   out('💥 this PR has self-destructed. You will not see it again.');
-  if (screenshot) out('📸 screenshot detected (nobody was notified, we have no servers)');
+  if (screenshot) out('📸 screenshot detected. The sender will see that in their read receipt.');
 }
