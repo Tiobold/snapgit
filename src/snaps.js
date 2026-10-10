@@ -1,5 +1,5 @@
 import { git, run, currentBranch, branchExists, protectedBranches } from './git.js';
-import { now } from './time.js';
+import { now, parseDuration } from './time.js';
 
 const key = (name) => `branch.${name}.snapgit-expires`;
 
@@ -20,18 +20,25 @@ export function listSnaps(cwd) {
   return snaps.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
+/** The timer every new snap gets unless you pick another at creation: git config snapgit.defaultTtl, else 24h. */
+export function defaultTtlMs(cwd) {
+  const r = run(['config', 'snapgit.defaultTtl'], { cwd });
+  return parseDuration(r.ok && r.out.trim() ? r.out.trim() : '24h');
+}
+
 export function getExpiry(name, cwd) {
   const r = run(['config', '--get', key(name)], { cwd });
   return r.ok ? Number(r.out.trim()) : null;
 }
 
+/** Internal: timers are set at creation (snap, pr send) or pulled forward at settle time. They are never extended. */
 export function setExpiry(name, expiresAt, cwd) {
   if (!branchExists(name, cwd)) throw new Error(`no such branch: ${name}`);
   if (protectedBranches(cwd).has(name)) throw new Error(`${name} is protected: some things are not meant to disappear`);
   git(['config', key(name), String(expiresAt)], { cwd });
 }
 
-export function clearExpiry(name, cwd) {
+function clearExpiry(name, cwd) {
   return run(['config', '--unset', key(name)], { cwd }).ok;
 }
 
@@ -50,16 +57,16 @@ export function createSnap(name, { ttlMs, from, stay = false, cwd }) {
  * Delete every expired snap branch. Never touches a branch that is checked out.
  * `settle` runs first and settles due PRs. Returns { ghosted, skipped, events }.
  */
-export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ events: [], merged: new Set(), held: new Map() }) }) {
+export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ events: [], gone: new Set(), held: new Map() }) }) {
   const ghosted = [];
   const skipped = [];
   const here = currentBranch(cwd);
   const safe = protectedBranches(cwd);
   const t = now();
-  const settled = dryRun ? { events: [], merged: new Set(), held: new Map() } : settle();
+  const settled = dryRun ? { events: [], gone: new Set(), held: new Map() } : settle();
   for (const snap of listSnaps(cwd)) {
-    const mergedNow = settled.merged.has(snap.name);
-    if (snap.expiresAt > t && !mergedNow) continue;
+    const goneNow = settled.gone.has(snap.name);
+    if (snap.expiresAt > t && !goneNow) continue;
     if (safe.has(snap.name)) {
       skipped.push({ name: snap.name, reason: 'protected' });
       continue;
@@ -74,7 +81,7 @@ export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ ev
       continue;
     }
     if (snap.name === here) {
-      if (mergedNow) setExpiry(snap.name, t, cwd); // vanish at the next sweep after you leave
+      if (goneNow) setExpiry(snap.name, t, cwd); // vanish at the next sweep after you leave
       skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
       continue;
     }

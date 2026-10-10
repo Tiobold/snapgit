@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -63,19 +63,20 @@ test('sweep never deletes the checked-out branch', () => {
   assert.ok(!branches(dir).includes('tmp'));
 });
 
-test('keep and extend change the timer; protected branches are refused', () => {
+test('every snap gets a timer by default, and timers can never be extended or removed', () => {
   const dir = repo();
-  snap(dir, ['snap', 'a', '--ttl', '1h', '--stay']);
-  snap(dir, ['snap', 'b', '--ttl', '1h', '--stay']);
-  assert.equal(snap(dir, ['extend', 'a', '5h']).status, 0);
-  assert.equal(snap(dir, ['keep', 'b']).status, 0);
-  snap(dir, ['sweep'], T0 + 3 * HOUR);
-  assert.deepEqual(branches(dir).sort(), ['a', 'b', 'main']);
-  snap(dir, ['sweep'], T0 + 7 * HOUR);
-  assert.deepEqual(branches(dir).sort(), ['b', 'main']);
+  assert.match(snap(dir, ['snap', 'a', '--stay']).stdout, /disappear in 1d/);
+  git(dir, 'config', 'snapgit.defaultTtl', '3h');
+  assert.match(snap(dir, ['snap', 'b', '--stay']).stdout, /disappear in 3h/);
+  for (const cmd of ['extend', 'keep']) {
+    const r = snap(dir, [cmd, 'a', '5h']);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /unknown command/);
+  }
+  snap(dir, ['sweep'], T0 + 4 * HOUR);
+  assert.deepEqual(branches(dir).sort(), ['a', 'main']); // b (3h) is gone, a (24h) is not
 
-  const r = snap(dir, ['snap', 'main']);
-  assert.notEqual(r.status, 0);
+  assert.notEqual(snap(dir, ['snap', 'main']).status, 0);
   assert.notEqual(snap(dir, ['snap', 'x', '--ttl', 'soon']).status, 0);
 });
 
@@ -269,29 +270,28 @@ test('while checked out, the PR still settles but the branch waits for you to le
   assert.ok(!branches(dir).includes('feat'));
 });
 
-test('keep refuses while a PR is live; burn withdraws it without merging', () => {
+test('burn withdraws a PR without merging; its branch still dies on its timer', () => {
   const dir = featureRepo();
   const id = sendId(dir);
-  const keep = snap(dir, ['keep', 'feat']);
-  assert.notEqual(keep.status, 0);
-  assert.match(keep.stderr, /live PR/);
   assert.equal(snap(dir, ['pr', 'burn', id]).status, 0);
   assert.equal(snap(dir, ['pr', 'burn', id]).status, 1);
   git(dir, 'switch', '-q', 'main');
   snap(dir, ['sweep'], T0 + 2 * HOUR);
   assert.ok(!mainHas(dir, 'f.txt'));
+  assert.ok(!branches(dir).includes('feat'));
   assert.notEqual(snap(dir, ['pr', 'open', '../../x', '--screenshot']).status, 0);
 });
 
-test('extending the branch extends the PR deadline', () => {
+test('sending a PR for a branch that already has a timer cannot change that timer', () => {
   const dir = featureRepo();
-  sendId(dir);
-  git(dir, 'switch', '-q', 'main');
-  snap(dir, ['extend', 'feat', '5h']);
-  snap(dir, ['sweep'], T0 + 3 * HOUR);
-  assert.ok(!mainHas(dir, 'f.txt'));
-  snap(dir, ['sweep'], T0 + 7 * HOUR);
-  assert.ok(mainHas(dir, 'f.txt'));
+  snap(dir, ['snap', 'other', '--ttl', '1h', '--stay']);
+  git(dir, 'branch', '-q', '-m', 'feat', 'feat2');
+  snap(dir, ['snap', 'feat', '--ttl', '1h']);
+  commit(dir, 'g.txt', 'g\n', 'more');
+  const r = snap(dir, ['pr', 'send', '--ttl', '9h']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /timers can never be changed/);
+  assert.equal(snap(dir, ['pr', 'send']).status, 0); // without --ttl it just uses the existing timer
 });
 
 function remotes() {
@@ -396,6 +396,166 @@ test('read receipts tell the sender who opened the PR and whether they screensho
   assert.match(r.stdout, /Alice <alice@example.com> opened "Receipt me"/);
   assert.match(r.stdout, /screenshot/);
   assert.match(snap(sender, ['pr', 'ls']).stdout, /opened by Alice/);
+});
+
+// Main gets snapgit.json and a file the branch lacks AFTER the branch point, so only the merge result has both.
+function ciRepo({ check, headMsg = 'add feature', send = true, sendAt = T0, mainCheck = check }) {
+  const dir = repo();
+  git(dir, 'switch', '-q', '-c', 'feat');
+  writeFileSync(join(dir, 'f.txt'), 'new feature\n');
+  git(dir, 'add', '.');
+  assert.equal(sh(dir, 'git', ['commit', '-q', '-m', headMsg]).status, 0);
+  git(dir, 'switch', '-q', 'main');
+  writeFileSync(join(dir, 'base.txt'), 'base\n');
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: check }] }));
+  git(dir, 'add', '.');
+  assert.equal(sh(dir, 'git', ['commit', '-q', '-m', 'ci config']).status, 0);
+  git(dir, 'switch', '-q', 'feat');
+  let id = null;
+  if (send) {
+    const r = snap(dir, ['pr', 'send', '--ttl', '1h'], sendAt);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    id = r.stdout.match(/id ([0-9a-f]{8})/)[1];
+  }
+  git(dir, 'switch', '-q', 'main');
+  if (mainCheck !== check) { // CI goes red on main after the PR was sent
+    writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: mainCheck }] }));
+    git(dir, 'commit', '-qam', 'tighten ci');
+  }
+  return { dir, id };
+}
+
+test('CI checks run against the merge result in a scratch worktree; a pass merges', () => {
+  const { dir } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
+  const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.match(swept.stdout, /feat merged into main \(1 CI check passed\)/);
+  assert.ok(mainHas(dir, 'f.txt'));
+  assert.equal(git(dir, 'status', '--porcelain'), '');
+  assert.equal(git(dir, 'worktree', 'list').split('\n').length, 1, 'scratch worktree cleaned up');
+});
+
+test('a PR that fails CI at send time is never sent: authors are shamed and the branch self-destructs', () => {
+  const { dir } = ciRepo({ check: 'echo "boom: 1 test failed" >&2; exit 3', send: false });
+  git(dir, 'switch', '-q', 'feat');
+  const r = snap(dir, ['pr', 'send', '--ttl', '1h']);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /not sent: feat failed CI.*"tests" exited 3/);
+  assert.match(r.stdout, /Shame on: Test/);
+  assert.match(r.stdout, /\| boom: 1 test failed/);
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/pr'), '');
+  assert.ok(branches(dir).includes('feat')); // checked out, so it vanishes once you leave
+  git(dir, 'switch', '-q', 'main');
+  snap(dir, ['sweep']);
+  assert.ok(!branches(dir).includes('feat'));
+  assert.ok(!mainHas(dir, 'f.txt'));
+  const list = JSON.parse(snap(dir, ['shame', '--json']).stdout);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].check, 'tests');
+  assert.equal(list[0].exitCode, 3);
+});
+
+test('CI that goes red between send and merge shames the authors at merge time and destroys the branch at once', () => {
+  const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'echo nope; exit 1' });
+  const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.match(swept.stdout, new RegExp(`PR ${id} failed CI: "tests" exited 1`));
+  assert.match(swept.stdout, /Shame on: Test/);
+  assert.match(swept.stdout, /ghosted feat/);
+  assert.ok(!mainHas(dir, 'f.txt'));
+  assert.ok(!branches(dir).includes('feat'));
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/pr'), '');
+  assert.match(snap(dir, ['shame']).stdout, /😬.*failed the "tests" check \(exit 1\)/);
+  assert.match(snap(dir, ['shame', '--clear']).stdout, /cleared 1/);
+  assert.match(snap(dir, ['shame']).stdout, /nobody has been shamed/);
+});
+
+test('a failing PR is destroyed as soon as the fuse burns out, not only when the branch timer ends', () => {
+  const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
+  git(dir, 'switch', '-q', 'main');
+  assert.equal(snap(dir, ['pr', 'open', id, '--screenshot']).status, 0);
+  const swept = snap(dir, ['sweep'], T0 + 61_000);
+  assert.match(swept.stdout, /failed CI/);
+  assert.ok(!branches(dir).includes('feat'));
+});
+
+test('agents are named and flagged in the shame message, via Co-Authored-By trailers', () => {
+  const { dir } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1', headMsg: 'add feature\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>' });
+  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  const [rec] = JSON.parse(snap(dir, ['shame', '--json']).stdout);
+  const byName = Object.fromEntries(rec.authors.map((a) => [a.name, a]));
+  assert.equal(byName['Test'].agent, false);
+  assert.equal(byName['Claude Sonnet'].agent, true);
+  assert.match(rec.message, /Claude Sonnet \(agent\)/);
+});
+
+test('a PR cannot switch off its own CI: checks come from the base branch', () => {
+  const dir = repo();
+  writeFileSync(join(dir, 'required.txt'), 'must exist\n');
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'guard', run: 'test -f required.txt' }] }));
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-qm', 'ci');
+  git(dir, 'switch', '-q', '-c', 'feat');
+  git(dir, 'rm', '-q', 'required.txt');
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [] })); // the branch's own, check-free config
+  git(dir, 'add', '.');
+  git(dir, 'commit', '-qm', 'nothing to see, no CI needed');
+  const r = snap(dir, ['pr', 'send', '--ttl', '1h']);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /not sent: feat failed CI.*"guard"/);
+});
+
+test('pr checks previews the result without merging or shaming', () => {
+  const { dir, id } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
+  const ok = snap(dir, ['pr', 'checks', id]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /✅ tests/);
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'lint', run: 'echo bad style; exit 2' }] }));
+  git(dir, 'commit', '-qam', 'add lint');
+  const bad = snap(dir, ['pr', 'checks', id]);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /❌ lint \(exit 2\)[\s\S]*bad style/);
+  assert.ok(branches(dir).includes('feat'));
+  assert.equal(JSON.parse(snap(dir, ['shame', '--json']).stdout).length, 0);
+});
+
+test('a broken snapgit.json holds the merge instead of waving the PR through', () => {
+  const { dir } = ciRepo({ check: 'exit 0' });
+  writeFileSync(join(dir, 'snapgit.json'), '{ not json');
+  git(dir, 'commit', '-qam', 'break ci config');
+  const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.match(swept.stdout, /kept feat: PR held: snapgit.json on main is not valid JSON/);
+  assert.ok(branches(dir).includes('feat'));
+  assert.ok(!mainHas(dir, 'f.txt'));
+});
+
+test('snapgit.shameCommand receives the shame record as JSON on stdin', () => {
+  const { dir } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
+  const sink = join(mkdtempSync(join(tmpdir(), 'snapgit-sink-')), 'shame.json');
+  git(dir, 'config', 'snapgit.shameCommand', `cat > ${sink}`);
+  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  const got = JSON.parse(readFileSync(sink, 'utf8'));
+  assert.equal(got.check, 'tests');
+  assert.equal(got.head, 'feat');
+  assert.ok(Array.isArray(got.authors));
+});
+
+test('over a remote, the shame reaches the other clones too', () => {
+  const bare = mkdtempSync(join(tmpdir(), 'snapgit-bare-'));
+  git(bare, 'init', '-q', '--bare', '-b', 'main');
+  const { dir } = ciRepo({ check: 'exit 0', send: false });
+  git(dir, 'remote', 'add', 'origin', bare);
+  git(dir, 'push', '-q', 'origin', 'main', 'feat');
+  const sent = snap(dir, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']);
+  assert.equal(sent.status, 0, sent.stdout);
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: 'exit 1' }] }));
+  git(dir, 'commit', '-qam', 'ci goes red');
+  assert.match(snap(dir, ['sweep', '--remote', 'origin'], T0 + 2 * HOUR).stdout, /failed CI/);
+  assert.ok(!branches(dir).includes('feat'));
+  assert.equal(git(dir, 'ls-remote', '.', 'refs/heads/feat'), '');
+
+  const author = mkdtempSync(join(tmpdir(), 'snapgit-author-'));
+  git(author, 'clone', '-q', bare, '.');
+  git(author, 'config', 'user.name', 'Agent'); git(author, 'config', 'user.email', 'agent@example.com');
+  assert.match(snap(author, ['shame']).stdout, /😬.*failed the "tests" check/);
 });
 
 test('streak counts consecutive days and survives until tomorrow', () => {

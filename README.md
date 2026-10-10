@@ -10,17 +10,21 @@ snapgit init        # optional: hooks so expired branches vanish on their own
 ## Disappearing branches
 
 ```
-snapgit snap wip/spike --ttl 2h     # git switch -c, plus a self-destruct timer
+snapgit snap wip/spike              # git switch -c, plus a self-destruct timer (24h by default)
+snapgit snap wip/spike --ttl 2h     # pick another timer, once, at creation
 snapgit ls                          # what's on the clock
-snapgit extend wip/spike 1h         # buy time
-snapgit keep wip/spike              # "save to memories": remove the timer
 snapgit sweep [--remote origin]     # delete everything expired (also the remote branch)
+git config snapgit.defaultTtl 8h    # change the default for this repo
 ```
 
-The timer lives in your git config (`branch.<name>.snapgit-expires`). Expiry is enforced by `sweep`, which runs from the
-git hooks `snapgit init` installs and every time you run `snapgit ls`. Rules: protected branches (main, master, trunk,
-develop, the origin default) can't get a timer, and a checked-out branch is never deleted, it just waits for you to leave.
-Ghosting prints the old tip so `git branch <name> <sha>` brings it back (until git gc).
+Every snap has a timer, and **timers can never be extended or removed**: there is no `extend` and no `keep`. Sending a PR for a
+branch that has no timer puts it on the clock with the default, and `pr send --ttl` is refused for a branch that already has one.
+(snapgit only puts timers on branches made with `snap` or sent with `pr send`; it never starts a timer on a branch you already have.)
+
+The timer lives in your git config (`branch.<name>.snapgit-expires`). Expiry is enforced by `sweep`, which runs from the git
+hooks `snapgit init` installs and every time you run `snapgit ls`. Protected branches (main, master, trunk, develop, the origin
+default) can't get a timer, and a checked-out branch is never deleted, it just waits for you to leave. Ghosting prints the old tip
+so `git branch <name> <sha>` brings it back (until git gc).
 
 ## Pull requests with one button
 
@@ -35,7 +39,7 @@ snapgit watch -r origin                                         # keep sweeping 
 
 There is no approve. A PR can only be rejected. **It merges 60 seconds after it is first opened unless rejected**, or, if nobody
 ever opens it, when its branch expires, whichever comes first. The opener can re-read the changed code until the fuse runs out;
-nobody else can open it (they can still reject). `snapgit extend` moves the branch deadline, and `snapgit keep` refuses while a PR is live.
+nobody else can open it (they can still reject). The branch deadline can't be moved.
 
 The merge is done by the sender's machine: `snapgit sweep` (or `snapgit watch`, which sweeps every few seconds) sees the receipt,
 merges, and deletes the branch. The git hooks from `snapgit init` sweep offline, so they settle local PRs and leave PRs that
@@ -53,6 +57,32 @@ spirit) is refused without opening, unless you pass `--screenshot`, which opens 
 
 Honest caveat: the patch stays readable in the ref and in the sender's repo, so "only the opener can read it" is a rule of
 the tool, not encryption.
+
+## CI checks, and shame
+
+Put a `snapgit.json` on the **base** branch:
+
+```json
+{ "checks": [{ "name": "tests", "run": "npm ci && npm test", "timeoutSec": 300 }] }
+```
+
+Checks run twice: when you `snapgit pr send` (fail fast, before any human or agent has to look at it) and again right before the
+merge, against the *merge result*, in a throwaway worktree so your own tree is never touched. `snapgit pr checks <id>` previews them
+without consequences. The config is read from the base branch, so a PR cannot switch off its own CI. No file means no checks; a
+malformed file holds the merge.
+
+If a check fails (or times out), nothing merges, and:
+
+- the people who wrote the branch are **shamed**: every commit author plus `Co-Authored-By` trailers, with agents (Claude, Copilot,
+  Cursor, bots...) flagged as such, the failing check's output, and a message that is not subtle;
+- the branch **self-destructs** immediately, not when its timer ends (the old tip is printed so it can be recovered);
+- the record is stored as `refs/snapgit/shame/<id>` and pushed to the remote when there is one. Read it with `snapgit shame`
+  (`--json` for an agent to consume, `--clear` to dismiss) from any clone;
+- if `git config snapgit.shameCommand '<cmd>'` is set, the record is piped to it as JSON on stdin, so you can post it to Slack or
+  hand it back to the coding agent that wrote the change.
+
+Checks execute the PR's code on the machine that sweeps, like any CI runner would, and they run inside the git hooks too, so keep them
+quick or let `snapgit watch` do the sweeping.
 
 ## Read receipts
 
@@ -77,7 +107,7 @@ sandbox. It talks only to the GitHub API, so there is nothing to run. See `web/R
 
 ## The video
 
-`docs/video/snapgit-tiktok.mp4` is a 40 second 1080x1920 pitch for TikTok, built from `docs/video/scenes.json`: HTML slides,
+`docs/video/snapgit-tiktok.mp4` is a 53 second 1080x1920 pitch (leadership wants more AI, review is the bottleneck, snapgit's answer) for TikTok, built from `docs/video/scenes.json`: HTML slides,
 headless Chromium screenshots, offline Kokoro narration, ffmpeg. The terminal slides are real captured output. Rebuild with
 `PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run
 downloads ~350 MB of voice models). Caption and hashtags: `docs/video/tiktok-caption.txt`. The outage figures come from

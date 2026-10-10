@@ -2,18 +2,26 @@
   {
     "id": "scene01",
     "kind": "hook",
-    "kicker": "Oct 7, 2026",
-    "big": "GitHub went down again.",
-    "sub": "Webhooks. Actions. Pull requests.",
-    "narration": "GitHub went down again. October seventh. Webhooks, Actions, pull requests."
+    "kicker": "Leadership memo",
+    "big": "Use AI more.",
+    "sub": "Ship faster.",
+    "narration": "Leadership wants engineers to use A I more."
   },
   {
     "id": "scene02",
+    "kind": "hook",
+    "kicker": "The problem",
+    "big": "AI writes the PR in minutes.",
+    "sub": "Then it waits in review. For hours. Sometimes days.",
+    "narration": "But A I writes the pull request in minutes. Then it sits in review for hours. Sometimes days."
+  },
+  {
+    "id": "scene03",
     "kind": "stats",
     "stats": [
       [
         "257",
-        "incidents in 12 months"
+        "GitHub incidents in 12 months"
       ],
       [
         "48",
@@ -21,46 +29,55 @@
       ]
     ],
     "note": "IncidentHub, May 2025 to April 2026",
-    "narration": "One tracker counted two hundred fifty seven incidents in twelve months. Forty eight of them major."
-  },
-  {
-    "id": "scene03",
-    "kind": "title",
-    "big": "snapgit",
-    "sub": "Git that disappears on purpose.",
-    "narration": "So I built snapgit. Git that disappears on purpose."
+    "caption": "And GitHub keeps going down.",
+    "narration": "And GitHub keeps going down. One tracker counted two hundred fifty seven incidents in twelve months. Forty eight of them major."
   },
   {
     "id": "scene04",
-    "kind": "terminal",
-    "kicker": "Branches",
-    "code": "$ snapgit snap wip/login --ttl 2h\n📸 wip/login will disappear in 2h (2026-10-10 20:27Z). Commit fast.\n\n$ snapgit ls\nwip/login                      33b0bf5  2h left",
-    "caption": "Self-destruct timer",
-    "narration": "Branches get a self destruct timer. When it hits zero, it's gone."
+    "kind": "title",
+    "big": "snapgit",
+    "sub": "Review gets a timer.",
+    "narration": "So I built snapgit. Review finally gets a timer."
   },
   {
     "id": "scene05",
     "kind": "terminal",
-    "kicker": "Pull requests",
-    "code": "$ snapgit pr open 7d7111d5\nFix login   #7d7111d5\n  33b0bf5 fix login\n+export const login = () => \"ok\";\n⏳ the fuse is lit: wip/login merges into main in 1m unless you run: snapgit pr reject 7d7111d5",
-    "caption": "One button: reject",
-    "narration": "Pull requests have exactly one button. Open one, and a sixty second fuse is lit. You can read every changed line. Or you can reject it."
+    "kicker": "Every branch",
+    "code": "$ snapgit snap wip/login\n📸 wip/login will disappear in 1d (2026-10-11 18:36Z). Commit fast.",
+    "caption": "Timer on by default. No extensions.",
+    "narration": "Every branch gets a self destruct timer by default. And nobody can extend it."
   },
   {
     "id": "scene06",
     "kind": "terminal",
-    "kicker": "60 seconds later",
-    "code": "$ snapgit sweep -r origin\n🔀 PR 7d7111d5: nobody rejected it, so wip/login merged into main and was pushed\n$ git log --oneline --graph\n*   772fef0 Merge wip/login into main\n|\\  \n| * 33b0bf5 fix login\n|/  \n* a689d11 init",
-    "caption": "No reject? It merges.",
-    "narration": "Don't reject it, and it merges. Merge by neglect."
+    "kicker": "Pull requests",
+    "code": "$ snapgit pr send -r origin\n📨 sent \"Fix login\" (wip/login -> main), 1 CI check passed\n\n$ snapgit pr open d37dd68f\n⏳ the fuse is lit: wip/login merges into main in 1m unless you run: snapgit pr reject d37dd68f",
+    "caption": "CI runs. 60s fuse. One button.",
+    "narration": "Send a pull request, and C I runs first. Open it, and a sixty second fuse is lit. You can read every changed line, and you get one button: reject."
   },
   {
     "id": "scene07",
+    "kind": "terminal",
+    "kicker": "Nobody rejects it",
+    "code": "(61 seconds later)\n$ snapgit sweep -r origin\n🔀 PR d37dd68f: nobody rejected it, so wip/login merged into main (1 CI check passed) and was pushed\n👻 ghosted wip/login (was 30e2104). Undo: git branch wip/login 30e2104",
+    "caption": "It merges. No review queue.",
+    "narration": "Nobody rejects it? It merges. No review queue."
+  },
+  {
+    "id": "scene08",
+    "kind": "terminal",
+    "kicker": "Fails CI?",
+    "code": "$ snapgit pr send wip/ai-login\n😬 not sent: wip/ai-login failed CI before anyone had to look at it (\"tests\" exited 1)\n   CI said no. The branch has left the building. PR 67aab67a \"AI login rewrite\" failed the \"tests\" check (exit 1). Shame on: Claudio, Claude Sonnet (agent). wip/ai-login is self-destructing. Fix it and send it again.\n   | FAIL login.test.js: login() returned undefined\n👻 ghosted wip/ai-login (was 09313a6). Undo: git branch wip/ai-login 09313a6",
+    "caption": "Shame. Branch gone.",
+    "narration": "And if the A I's code fails C I? The authors get shamed, human or agent, and the branch self destructs."
+  },
+  {
+    "id": "scene09",
     "kind": "outro",
     "big": "No servers.",
-    "sub": "Nothing to take down.",
+    "sub": "No waiting.",
     "cta": "github.com/Tiobold/snapgit",
     "tag": "Hosted on GitHub. We know.",
-    "narration": "No servers, so there's nothing to take down. snapgit. Link in bio. Hosted on GitHub. We know."
+    "narration": "No servers, no waiting. snapgit. Link in bio. Hosted on GitHub. We know."
   }
 ]

@@ -52,7 +52,7 @@ function render(s) {
     case "hook":
       return page(`<div class="kicker">${esc(s.kicker)}</div><div class="big">${esc(s.big)}</div><div class="sub">${esc(s.sub)}</div>`);
     case "stats":
-      return page(`${s.stats.map(([n, l]) => `<div class="stat"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("")}<div class="note">${esc(s.note)}</div>`);
+      return page(`${s.stats.map(([n, l]) => `<div class="stat"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("")}<div class="note">${esc(s.note)}</div>${s.caption ? `<div class="cap"><span>${esc(s.caption)}</span></div>` : ""}`);
     case "title":
       return page(`<div class="hero">👻 ${esc(s.big)}</div><div class="big" style="font-size:96px">${esc(s.sub)}</div>`);
     case "terminal":

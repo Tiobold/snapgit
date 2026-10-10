@@ -1,8 +1,8 @@
 import { parseArgs } from 'node:util';
 import { hasRemote, run } from './git.js';
 import { parseDuration, formatDuration, now } from './time.js';
-import { createSnap, listSnaps, setExpiry, getExpiry, clearExpiry, sweep } from './snaps.js';
-import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, retimePr, prForBranch, fuseMs } from './pr.js';
+import { createSnap, listSnaps, sweep, defaultTtlMs } from './snaps.js';
+import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, previewChecks, listShame, clearShame, fuseMs } from './pr.js';
 import { streak } from './streak.js';
 import { story } from './story.js';
 import { installHooks } from './hooks.js';
@@ -10,9 +10,8 @@ import { installHooks } from './hooks.js';
 const HELP = `snapgit: git, but it disappears
 
   snapgit snap <branch> [--ttl 24h] [--from <ref>] [--stay]   new branch with a self-destruct timer
+                                                              (24h unless you choose; it can never be extended)
   snapgit ls                                                  branches on the clock
-  snapgit extend <branch> <duration>                          buy more time (e.g. 12h)
-  snapgit keep <branch>                                       save to memories (remove the timer)
   snapgit sweep [--remote origin] [--dry-run] [--quiet]       delete expired branches, merge due PRs
   snapgit watch [--remote origin] [--every 5s]                keep sweeping, so fuses burn on time
   snapgit init                                                install hooks so sweeping is automatic
@@ -57,7 +56,13 @@ const TTL = { ttl: { type: 'string', short: 't' } };
 function printSweep({ ghosted, skipped, events }, quiet, dryRun) {
   for (const e of events) {
     if (e.action === 'merged') {
-      out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}`);
+      out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.checks ? ` (${e.checks} CI check${e.checks > 1 ? 's' : ''} passed)` : ''}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}`);
+    } else if (e.action === 'shamed') {
+      const r = e.record;
+      out(`😬 PR ${e.id} failed CI: "${r.check}" ${r.timedOut ? 'timed out' : `exited ${r.exitCode}`}`);
+      out(`   ${r.message}`);
+      if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n'));
+      if (e.notifyError) out(`   (${e.notifyError})`);
     } else if (e.action === 'rejected') {
       out(`🚫 PR ${e.id} rejected by ${e.by}${e.reason ? `: "${e.reason}"` : ''}. Nothing merged`);
     }
@@ -75,7 +80,7 @@ const COMMANDS = {
   snap(argv, cwd) {
     const { values, positionals } = args(argv, { ...TTL, from: { type: 'string' }, stay: { type: 'boolean' } });
     if (positionals.length !== 1) throw new Error('usage: snapgit snap <branch> [--ttl 24h]');
-    const ttlMs = parseDuration(values.ttl ?? '24h');
+    const ttlMs = values.ttl ? parseDuration(values.ttl) : defaultTtlMs(cwd);
     const expiresAt = createSnap(positionals[0], { ttlMs, from: values.from, stay: values.stay, cwd });
     out(`📸 ${positionals[0]} will disappear in ${formatDuration(ttlMs)} (${when(expiresAt)}). Commit fast.`);
   },
@@ -88,28 +93,6 @@ const COMMANDS = {
       const left = s.expiresAt - now();
       out(`${s.name.padEnd(30)} ${s.tip}  ${left > 0 ? paint(33, formatDuration(left) + ' left') : paint(31, 'expired, awaiting sweep')}`);
     }
-  },
-
-  extend(argv, cwd) {
-    const { positionals } = args(argv, {});
-    if (positionals.length !== 2) throw new Error('usage: snapgit extend <branch> <duration>');
-    const [name, dur] = positionals;
-    const current = getExpiry(name, cwd);
-    if (current === null) throw new Error(`${name} is not on the clock`);
-    if (current <= now()) throw new Error(`${name} already expired; it is too late for extensions`);
-    const next = current + parseDuration(dur);
-    setExpiry(name, next, cwd);
-    retimePr(name, next, cwd);
-    out(`⏳ ${name} now disappears ${when(next)}`);
-  },
-
-  keep(argv, cwd) {
-    const { positionals } = args(argv, {});
-    if (positionals.length !== 1) throw new Error('usage: snapgit keep <branch>');
-    const pending = prForBranch(positionals[0], cwd);
-    if (pending) throw new Error(`${positionals[0]} has a live PR (${pending.id}): reject it or withdraw it with snapgit pr burn, otherwise it merges when the branch expires`);
-    if (!clearExpiry(positionals[0], cwd)) throw new Error(`${positionals[0]} is not on the clock`);
-    out(`💾 ${positionals[0]} saved to memories. It will not disappear.`);
   },
 
   sweep(argv, cwd) {
@@ -125,6 +108,16 @@ const COMMANDS = {
     if (!dryRun) {
       for (const id of sweepPrs(cwd)) out(`💨 PR ${id} dropped: its branch is gone, nothing to merge`);
     }
+  },
+
+  shame(argv, cwd) {
+    const { values } = args(argv, { remote: { type: 'string', short: 'r' }, json: { type: 'boolean' }, clear: { type: 'boolean' } }, false);
+    const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
+    const records = listShame({ cwd, remote });
+    if (values.json) out(JSON.stringify(records, null, 2));
+    else if (!records.length) out('nobody has been shamed. Yet');
+    else for (const r of records) { out(`😬 ${r.message}`); if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n')); }
+    if (values.clear) out(`cleared ${clearShame({ cwd, remote })} record(s)`);
   },
 
   async watch(argv, cwd) {
@@ -172,8 +165,18 @@ const COMMANDS = {
       const { values, positionals } = args(rest, { ...remoteOpt, ...TTL, base: { type: 'string', short: 'b' }, message: { type: 'string', short: 'm' } });
       const remote = values.remote;
       if (remote && !hasRemote(remote, cwd)) throw new Error(`no remote named ${remote}`);
-      const rec = createPr({ cwd, head: positionals[0], base: values.base, message: values.message, ttlMs: parseDuration(values.ttl ?? '24h'), remote });
-      out(`📨 sent "${rec.title}" (${rec.head} -> ${rec.base})`);
+      const sent = createPr({ cwd, head: positionals[0], base: values.base, message: values.message, ttlMs: values.ttl ? parseDuration(values.ttl) : undefined, remote });
+      if (sent.shame) {
+        const r = sent.shame;
+        out(`😬 not sent: ${r.head} failed CI before anyone had to look at it ("${r.check}" ${r.timedOut ? 'timed out' : `exited ${r.exitCode}`})`);
+        out(`   ${r.message}`);
+        if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n'));
+        if (sent.notifyError) out(`   (${sent.notifyError})`);
+        printSweep(sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) }), false, false);
+        return 1;
+      }
+      const rec = sent.pr;
+      out(`📨 sent "${rec.title}" (${rec.head} -> ${rec.base})${sent.ran ? `, ${sent.ran} CI check${sent.ran > 1 ? 's' : ''} passed` : ''}`);
       out(`   id ${rec.id}, 60 seconds after it is first opened (or at ${when(rec.expiresAt)}), it merges into ${rec.base} unless rejected`);
       out(remote ? `   recipient: snapgit pr open ${rec.id} -r ${remote}   (or snapgit pr reject ${rec.id} -r ${remote})` : `   not pushed anywhere yet; use --remote <name> to deliver it`);
       return;
@@ -222,6 +225,15 @@ const COMMANDS = {
         out(`👀 ${r.opener} opened "${r.title}" (#${r.id}) at ${when(r.openedAt)}${r.screenshot ? ' 📸 and took a screenshot' : ''}`);
       }
       return;
+    }
+    if (sub === 'checks') {
+      const { positionals } = args(rest, {});
+      if (positionals.length !== 1) throw new Error('usage: snapgit pr checks <id>');
+      const r = previewChecks(positionals[0], { cwd });
+      if (!r.checks) return out('no checks defined (add snapgit.json to the base branch)');
+      for (const c of r.results) out(`${c.code === 0 ? '✅' : '❌'} ${c.name}${c.code === 0 ? '' : c.timedOut ? ' (timed out)' : ` (exit ${c.code})`}`);
+      if (!r.ok) out(r.results.at(-1).output.split('\n').map((l) => `   | ${l}`).join('\n'));
+      return r.ok ? 0 : 1;
     }
     if (sub === 'burn') {
       const { values, positionals } = args(rest, remoteOpt);
