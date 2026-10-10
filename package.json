@@ -1,0 +1,10 @@
+{
+  "name": "snapgit",
+  "version": "0.1.0",
+  "description": "Git meets Snapchat. Disappearing branches, view-once pull requests, and commit streaks.",
+  "type": "module",
+  "bin": { "snapgit": "bin/snapgit.js" },
+  "scripts": { "test": "node --test \"test/*.test.js\"" },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}
