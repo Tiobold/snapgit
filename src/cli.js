@@ -1,30 +1,56 @@
 import { parseArgs } from 'node:util';
 import { hasRemote, run } from './git.js';
 import { parseDuration, formatDuration, now } from './time.js';
-import { createSnap, listSnaps, sweep, defaultTtlMs } from './snaps.js';
-import { createPr, openPr, rejectPr, burnPr, listLocalPrs, listRemotePrIds, sweepPrs, collectReceipts, receiptFor, settlePrs, previewChecks, listShame, clearShame, fuseOf } from './pr.js';
+import { createSnap, listSnaps, sweep, defaultTtlMs, getExpiry } from './snaps.js';
+import { createPr, openPr, rejectPr, approvePr, burnPr, listLocalPrs, listRemotePrIds, remotePrHeads, sweepPrs, collectReceipts, receiptFor, settlePrs, previewChecks, listShame, clearShame, listMerged, undoPr, fuseOf } from './pr.js';
 import { streak } from './streak.js';
 import { story } from './story.js';
 import { installHooks } from './hooks.js';
+import { graves, resurrect } from './graveyard.js';
+import { freeze, thaw, frozenReason } from './freeze.js';
+import { publishTimer, sweepRemoteTimers } from './timers.js';
+import { loadPolicy } from './policy.js';
+import { resolveReviewers, ident } from './authz.js';
+import { defaultBranch, currentBranch } from './git.js';
+import { readFileSync } from 'node:fs';
 
 const HELP = `snapgit: git, but it disappears
 
+BRANCHES
   snapgit snap <branch> [--ttl 24h] [--from <ref>] [--stay]   new branch with a self-destruct timer
-                                                              (24h unless you choose; it can never be extended)
+                                                              (24h by default; it can never be extended)
   snapgit ls                                                  branches on the clock
-  snapgit sweep [--remote origin] [--dry-run] [--quiet]       delete expired branches, merge due PRs
-  snapgit watch [--remote origin] [--every 5s]                keep sweeping, so fuses burn on time
+  snapgit push [branch] [-r origin]                           push a branch and publish its timer, so any
+                                                              runner can delete it on time
+  snapgit sweep [-r origin] [--dry-run] [--quiet] [--offline] delete expired branches, settle due PRs
+  snapgit watch [-r origin] [--every 5s]                      keep sweeping so fuses burn on time
   snapgit init                                                install hooks so sweeping is automatic
+  snapgit graveyard                                           branches that can be resurrected
+  snapgit resurrect <branch>                                  bring one back (with a fresh timer)
 
-  snapgit pr send [branch] [--base main] [-m "title\\nbody"] [--ttl 24h] [--remote origin]
-  snapgit pr open <id> [--remote origin]                      read once, then it's gone
-  snapgit pr ls [--remote origin]                             unopened PRs
-  snapgit pr burn <id> [--remote origin]                      retract without reading
+PULL REQUESTS  (no approve: reject, or it merges. Never opened? It is deleted)
+  snapgit pr send [branch] [--base main] [-m "title\nbody"] [--ttl 24h] [-r origin]
+  snapgit pr open <id> [-r origin]                            read the changes; lights a fuse sized to them
+  snapgit pr reject <id> [-m reason] [-r origin]              the only button there is
+  snapgit pr approve <id> [-r origin]                         only for PRs touching protectedPaths
+  snapgit pr ls [-r origin]                                   live PRs
+  snapgit pr checks <id>                                      run the CI checks on the would-be merge
+  snapgit pr receipts [-r origin]                             who opened (or screenshotted) your PRs
+  snapgit pr burn <id> [-r origin]                            withdraw it (no merge)
+  snapgit merged                                              what snapgit merged here
+  snapgit undo <id> [--push -r origin]                        revert a merge (a revert commit, no rewriting)
 
-  snapgit pr receipts [--remote origin]                       who opened (or screenshotted) your PRs; read once
+SAFETY
+  snapgit shame [-r origin] [--json] [--clear]                who broke CI (their branches self-destructed)
+  snapgit freeze [reason] [-r origin] / thaw [-r origin]      kill switch: nothing merges or disappears
+  snapgit policy                                              the effective rules (snapgit.json on base)
 
+FOR FUN
   snapgit streak                                              your commit streak
   snapgit story [--since 24h]                                 your last day in git, then it's gone
+
+Rules live in snapgit.json on the base branch: checks, fuse sizing and ignores, reviewers, protectedPaths.
+Notifications: git config snapgit.notifyCommand / snapgit.slackWebhook.
 `;
 
 const paint = (code, s) => (process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -34,6 +60,10 @@ const when = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) +
 export async function main(argv, cwd = process.cwd()) {
   const [cmd, ...rest] = argv;
   try {
+    if (cmd === '--version' || cmd === '-v') {
+      out(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+      return 0;
+    }
     if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
       out(HELP);
       return 0;
@@ -53,25 +83,42 @@ const args = (argv, options, positionals = true) =>
 
 const TTL = { ttl: { type: 'string', short: 't' } };
 
-function printSweep({ ghosted, skipped, events }, quiet, dryRun) {
+function printSweep({ ghosted, skipped, events, remoteGhosted = [] }, quiet, dryRun) {
   for (const e of events) {
-    if (e.action === 'merged') {
-      out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.checks ? ` (${e.checks} CI check${e.checks > 1 ? 's' : ''} passed)` : ''}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}`);
+    if (e.action === 'frozen') {
+      out(`🧊 frozen (${e.reason}): nothing merges or disappears until snapgit thaw`);
+    } else if (e.action === 'merged') {
+      out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.checks ? ` (${e.checks} CI check${e.checks > 1 ? 's' : ''} passed)` : ''}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}. Undo: snapgit undo ${e.id}`);
+    } else if (e.action === 'expired') {
+      out(e.reason ? `💨 PR ${e.id}: it touches protected paths and was never approved, so it was deleted. Nothing merged` : `💨 PR ${e.id}: nobody ever opened it, so it was deleted. Nothing merged`);
     } else if (e.action === 'shamed') {
       const r = e.record;
       out(`😬 PR ${e.id} failed CI: "${r.check}" ${r.timedOut ? 'timed out' : `exited ${r.exitCode}`}`);
       out(`   ${r.message}`);
       if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n'));
-      if (e.notifyError) out(`   (${e.notifyError})`);
+      for (const w of e.warnings ?? []) out(`   (${w})`);
+    } else if (e.action === 'hold') {
+      if (!quiet) out(`✋ PR ${e.id} is held: ${e.reason}`);
     } else if (e.action === 'rejected') {
       out(`🚫 PR ${e.id} rejected by ${e.by}${e.reason ? `: "${e.reason}"` : ''}. Nothing merged`);
     }
   }
   for (const g of ghosted) {
-    out(`👻 ${dryRun ? 'would ghost' : 'ghosted'} ${g.name} (was ${g.sha}${g.remote ? ', remote too' : ''}). Undo: git branch ${g.name} ${g.sha}`);
+    out(`👻 ${dryRun ? 'would ghost' : 'ghosted'} ${g.name} (was ${g.sha}${g.remote ? ', remote too' : ''}). Bring it back: snapgit resurrect ${g.name}`);
   }
+  for (const g of remoteGhosted) out(`👻 ${g.existed ? 'deleted' : 'cleared the timer of'} ${g.branch} on the remote (its published timer ran out)`);
   if (!quiet) for (const s of skipped) out(`   kept ${s.name}: ${s.reason}`);
-  if (!quiet && !ghosted.length && !skipped.length && !events.length) out('nothing has expired');
+  if (!quiet && !ghosted.length && !skipped.length && !events.length && !remoteGhosted.length) out('nothing has expired');
+}
+
+/** One full sweep: settle PRs, delete expired branches, and (with a remote) honor timers other people published. */
+function fullSweep({ cwd, remote, dryRun = false, offline = false }) {
+  const result = sweep({ cwd, remote, dryRun, settle: () => settlePrs({ cwd, push: !!remote, offline }) });
+  if (remote && !offline && !dryRun && !result.events.some((e) => e.action === 'frozen')) {
+    const live = new Set([...listLocalPrs(cwd).map((p) => p.head), ...remotePrHeads(remote, cwd)]);
+    result.remoteGhosted = sweepRemoteTimers({ cwd, remote, liveHeads: live });
+  }
+  return result;
 }
 
 const prForBranchId = (id, cwd) => listLocalPrs(cwd).some((r) => r.id === id);
@@ -103,8 +150,7 @@ const COMMANDS = {
       offline: { type: 'boolean' },
     }, false);
     const dryRun = values['dry-run'];
-    const result = sweep({ cwd, remote: values.remote, dryRun, settle: () => settlePrs({ cwd, push: !!values.remote, offline: values.offline }) });
-    printSweep(result, values.quiet, dryRun);
+    printSweep(fullSweep({ cwd, remote: values.remote, dryRun, offline: values.offline }), values.quiet, dryRun);
     if (!dryRun) {
       for (const id of sweepPrs(cwd)) out(`💨 PR ${id} dropped: its branch is gone, nothing to merge`);
     }
@@ -120,12 +166,72 @@ const COMMANDS = {
     if (values.clear) out(`cleared ${clearShame({ cwd, remote })} record(s)`);
   },
 
+  merged(argv, cwd) {
+    const list = listMerged(cwd);
+    if (!list.length) return out('snapgit has not merged anything here');
+    for (const m of list) out(`${m.id}  ${m.title}  (${m.head} -> ${m.base}, ${when(m.mergedAt)})${m.undoneAt ? '  ↩️ undone' : ''}`);
+  },
+
+  undo(argv, cwd) {
+    const { values, positionals } = args(argv, { remote: { type: 'string', short: 'r' }, push: { type: 'boolean' } });
+    if (positionals.length !== 1) throw new Error('usage: snapgit undo <id> [--push -r origin]');
+    const r = undoPr(positionals[0], { cwd, remote: values.remote, push: values.push });
+    out(`↩️ undone: ${r.base} now has revert commit ${r.revert}${r.pushed ? ' (pushed)' : ''}. The branch can come back with: snapgit resurrect ${r.head}`);
+  },
+
+  graveyard(argv, cwd) {
+    const list = graves(cwd);
+    if (!list.length) return out('the graveyard is empty');
+    for (const g of list) out(`${g.name.padEnd(30)} ${g.sha.slice(0, 7)}  ghosted ${when(g.buriedAt)}`);
+  },
+
+  resurrect(argv, cwd) {
+    const { positionals } = args(argv, {});
+    if (positionals.length !== 1) throw new Error('usage: snapgit resurrect <branch>');
+    const r = resurrect(positionals[0], cwd);
+    out(`🧟 ${positionals[0]} is back at ${r.sha}, with a fresh timer: it disappears again ${when(r.expiresAt)}`);
+  },
+
+  freeze(argv, cwd) {
+    const { values, positionals } = args(argv, { remote: { type: 'string', short: 'r' } });
+    freeze({ cwd, remote: values.remote, reason: positionals.join(' ') || 'frozen' });
+    out(`🧊 frozen${values.remote ? ` (and published to ${values.remote})` : ''}. Nothing merges or disappears until: snapgit thaw`);
+  },
+
+  thaw(argv, cwd) {
+    const { values } = args(argv, { remote: { type: 'string', short: 'r' } }, false);
+    thaw({ cwd, remote: values.remote });
+    out('☀️ thawed. Anything that came due while frozen settles at the next sweep');
+  },
+
+  push(argv, cwd) {
+    const { values, positionals } = args(argv, { remote: { type: 'string', short: 'r' } });
+    const remote = values.remote ?? 'origin';
+    if (!hasRemote(remote, cwd)) throw new Error(`no remote named ${remote}`);
+    const branch = positionals[0] ?? currentBranch(cwd);
+    const expiresAt = getExpiry(branch, cwd);
+    if (expiresAt === null) throw new Error(`${branch} has no timer: make branches with snapgit snap`);
+    const pushed = run(['push', '-u', remote, branch], { cwd });
+    if (!pushed.ok) throw new Error(`push failed: ${pushed.err}`);
+    out(`⬆️ pushed ${branch} to ${remote}. ${publishTimer(branch, expiresAt, remote, cwd) ? `Its timer is published: any runner can delete it at ${when(expiresAt)}` : 'The remote already has a timer for it, and timers cannot change'}`);
+  },
+
+  policy(argv, cwd) {
+    const base = defaultBranch(cwd);
+    const p = loadPolicy(base, cwd);
+    out(`policy from ${base}:snapgit.json${run(['cat-file', '-e', `refs/heads/${base}:snapgit.json`], { cwd }).ok ? '' : ' (none, defaults)'}`);
+    out(JSON.stringify({ ...p, reviewers: p.reviewers === 'CODEOWNERS' ? resolveReviewers(p, base, cwd) : p.reviewers }, null, 2));
+    out(`you are: ${ident(cwd)}`);
+    const fr = frozenReason({ cwd });
+    if (fr) out(`🧊 frozen: ${fr}`);
+  },
+
   async watch(argv, cwd) {
     const { values } = args(argv, { remote: { type: 'string', short: 'r' }, every: { type: 'string' } }, false);
     const everyMs = parseDuration(values.every ?? '5s');
     out(`👀 watching every ${formatDuration(everyMs)}${values.remote ? ` (remote ${values.remote})` : ''}. Ctrl-C to stop`);
     for (;;) {
-      printSweep(sweep({ cwd, remote: values.remote, settle: () => settlePrs({ cwd, push: !!values.remote }) }), true, false);
+      printSweep(fullSweep({ cwd, remote: values.remote }), true, false);
       await new Promise((r) => setTimeout(r, everyMs));
     }
   },
@@ -171,13 +277,16 @@ const COMMANDS = {
         out(`😬 not sent: ${r.head} failed CI before anyone had to look at it ("${r.check}" ${r.timedOut ? 'timed out' : `exited ${r.exitCode}`})`);
         out(`   ${r.message}`);
         if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n'));
-        if (sent.notifyError) out(`   (${sent.notifyError})`);
+        for (const w of sent.warnings ?? []) out(`   (${w})`);
         printSweep(sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) }), false, false);
         return 1;
       }
       const rec = sent.pr;
       out(`📨 sent "${rec.title}" (${rec.head} -> ${rec.base})${sent.ran ? `, ${sent.ran} CI check${sent.ran > 1 ? 's' : ''} passed` : ''}`);
-      out(`   id ${rec.id}, ${rec.lines} changed line${rec.lines === 1 ? '' : 's'} = a ${formatDuration(rec.fuseMs)} fuse: it merges into ${rec.base} that long after it is first opened (or at ${when(rec.expiresAt)}) unless rejected`);
+      const ignored = rec.ignoredLines ? ` (${rec.ignoredLines} more in ignored files)` : '';
+      out(`   id ${rec.id}, ${rec.lines} changed line${rec.lines === 1 ? '' : 's'}${ignored} = a ${formatDuration(rec.fuseMs)} fuse: it merges into ${rec.base} that long after it is first opened unless rejected. Never opened by ${when(rec.expiresAt)}? It is deleted`);
+      if (rec.protected) out(`   touches protected paths (${rec.protectedFiles.slice(0, 3).join(', ')}): a reviewer must also run snapgit pr approve ${rec.id}`);
+      for (const w of sent.warnings ?? []) out(`   (${w})`);
       out(remote ? `   recipient: snapgit pr open ${rec.id} -r ${remote}   (or snapgit pr reject ${rec.id} -r ${remote})` : `   not pushed anywhere yet; use --remote <name> to deliver it`);
       return;
     }
@@ -199,6 +308,14 @@ const COMMANDS = {
       const remote = values.remote ?? (hasRemote('origin', cwd) && !prForBranchId(positionals[0], cwd) ? 'origin' : undefined);
       rejectPr(positionals[0], { cwd, remote, reason: values.message });
       out('🚫 rejected. It will not be merged');
+      return;
+    }
+    if (sub === 'approve') {
+      const { values, positionals } = args(rest, remoteOpt);
+      if (positionals.length !== 1) throw new Error('usage: snapgit pr approve <id>');
+      const remote = values.remote ?? (hasRemote('origin', cwd) && !prForBranchId(positionals[0], cwd) ? 'origin' : undefined);
+      const a = approvePr(positionals[0], { cwd, remote });
+      out(`✅ approved by ${a.approver}. It still merges only if its fuse burns out unrejected`);
       return;
     }
     if (sub === 'ls') {
@@ -242,7 +359,7 @@ const COMMANDS = {
       out('🔥 burned');
       return;
     }
-    throw new Error('usage: snapgit pr <send|open|reject|ls|receipts|burn>');
+    throw new Error('usage: snapgit pr <send|open|reject|approve|ls|checks|receipts|burn>');
   },
 };
 

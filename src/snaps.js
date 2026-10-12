@@ -1,5 +1,7 @@
 import { git, run, currentBranch, branchExists, protectedBranches } from './git.js';
 import { now, parseDuration } from './time.js';
+import { bury, pruneGraveyard } from './graveyard.js';
+import { frozenReason } from './freeze.js';
 
 const key = (name) => `branch.${name}.snapgit-expires`;
 
@@ -63,6 +65,8 @@ export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ ev
   const here = currentBranch(cwd);
   const safe = protectedBranches(cwd);
   const t = now();
+  const frozen = dryRun ? null : frozenReason({ cwd, remote });
+  if (frozen) return { ghosted, skipped, events: [{ action: 'frozen', reason: frozen }] };
   const settled = dryRun ? { events: [], gone: new Set(), held: new Map() } : settle();
   for (const snap of listSnaps(cwd)) {
     const goneNow = settled.gone.has(snap.name);
@@ -85,17 +89,26 @@ export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ ev
       skipped.push({ name: snap.name, reason: 'checked out; it will vanish once you leave' });
       continue;
     }
+    const grave = bury(snap.name, cwd); // keep the tip reachable: ghosting is undoable with `snapgit resurrect`
     const del = run(['branch', '-D', snap.name], { cwd });
     if (!del.ok) {
+      run(['update-ref', '-d', grave], { cwd });
       skipped.push({ name: snap.name, reason: del.err.split('\n')[0] });
       continue;
     }
     clearExpiry(snap.name, cwd);
+    run(['update-ref', '-d', `refs/snapgit/timer/${snap.name}`], { cwd });
     let remoteGone = false;
-    if (remote && run(['ls-remote', '--exit-code', '--heads', remote, snap.name], { cwd }).ok) {
-      remoteGone = run(['push', remote, '--delete', snap.name], { cwd }).ok;
+    if (remote) {
+      if (run(['ls-remote', '--exit-code', '--heads', remote, snap.name], { cwd }).ok) {
+        remoteGone = run(['push', remote, '--delete', snap.name], { cwd }).ok;
+      }
+      if (run(['ls-remote', '--exit-code', remote, `refs/snapgit/timer/${snap.name}`], { cwd }).ok) {
+        run(['push', remote, '--delete', `refs/snapgit/timer/${snap.name}`], { cwd });
+      }
     }
     ghosted.push({ name: snap.name, sha, remote: remoteGone });
   }
+  if (!dryRun) pruneGraveyard(cwd);
   return { ghosted, skipped, events: settled.events };
 }

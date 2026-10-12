@@ -114,6 +114,11 @@ const sendId = (dir, ...extra) => {
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.match(/id ([0-9a-f]{8})/)[1];
 };
+const openIt = (dir, id, at = T0) => {
+  const r = snap(dir, ['pr', 'open', id, '--screenshot'], at);
+  assert.equal(r.status, 0, r.stderr);
+  return r;
+};
 const mainHas = (dir, file) => sh(dir, 'git', ['cat-file', '-e', `main:${file}`]).status === 0;
 
 test('sending a PR puts the branch on the clock; opening shows the changed code and lights its fuse', () => {
@@ -152,7 +157,8 @@ test('a PR merges 60 seconds after it is opened, even though the branch timer ha
   assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it, so feat merged into main`));
   assert.ok(mainHas(dir, 'f.txt'));
   assert.ok(!branches(dir).includes('feat')); // merged branches don't wait for their timer
-  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit'), '');
+  for (const ns of ['pr', 'receipt', 'reject']) assert.equal(git(dir, 'for-each-ref', `refs/snapgit/${ns}`), '');
+  assert.match(git(dir, 'for-each-ref', 'refs/snapgit/merged'), /refs\/snapgit\/merged\//); // the ledger remembers it
 });
 
 test('rejecting inside the fuse window stops the merge; the fuse cannot be re-lit afterwards', () => {
@@ -188,29 +194,29 @@ test('piping a PR without --screenshot refuses and does not burn it', () => {
   assert.equal(snap(dir, ['pr', 'open', id, '--screenshot']).status, 0);
 });
 
-test('an unopened PR nobody rejects merges into main when its branch expires, then the branch vanishes', () => {
+test('a PR nobody ever opens is deleted when its branch expires: nothing merges on a timer alone', () => {
   const dir = featureRepo();
   const id = sendId(dir);
   git(dir, 'switch', '-q', 'main');
-  assert.ok(!mainHas(dir, 'f.txt'));
   const early = snap(dir, ['sweep'], T0 + HOUR / 2);
-  assert.doesNotMatch(early.stdout, /merged/);
-  assert.ok(!mainHas(dir, 'f.txt'));
+  assert.doesNotMatch(early.stdout, /nobody ever opened|merged into/);
+  assert.match(snap(dir, ['pr', 'ls']).stdout, new RegExp(id));
 
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
-  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it, so feat merged into main`));
-  assert.ok(mainHas(dir, 'f.txt'));
+  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody ever opened it, so it was deleted`));
+  assert.doesNotMatch(swept.stdout, /merged into/);
+  assert.ok(!mainHas(dir, 'f.txt'));
   assert.ok(!branches(dir).includes('feat'));
   assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/pr'), '');
-  assert.match(git(dir, 'log', '-1', '--format=%P'), / /); // a real two-parent merge commit
-  assert.equal(git(dir, 'status', '--porcelain'), '');
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/merged'), '');
 });
 
 test('merging works when main is not checked out (no working tree needed)', () => {
   const dir = featureRepo();
-  sendId(dir);
+  const id = sendId(dir);
+  openIt(dir, id);
   git(dir, 'switch', '-q', '-c', 'elsewhere', 'main');
-  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  snap(dir, ['sweep'], T0 + 61_000);
   assert.ok(mainHas(dir, 'f.txt'));
   assert.ok(!branches(dir).includes('feat'));
 });
@@ -229,20 +235,22 @@ test('a rejected PR never merges, and the branch still dies on schedule', () => 
 test('a rejection that arrives after the deadline is too late', () => {
   const dir = featureRepo();
   const id = sendId(dir);
+  openIt(dir, id);
   git(dir, 'switch', '-q', 'main');
-  sh(dir, 'node', [BIN, 'pr', 'reject', id], { SNAPGIT_NOW: String(T0 + 2 * HOUR) });
-  const swept = snap(dir, ['sweep'], T0 + 2 * HOUR + 1000);
-  assert.match(swept.stdout, /merged into main \(a rejection arrived too late\)/);
+  sh(dir, 'node', [BIN, 'pr', 'reject', id], { SNAPGIT_NOW: String(T0 + 61_000), SNAPGIT_FUSE_MS: '60000' });
+  const swept = snap(dir, ['sweep'], T0 + 62_000);
+  assert.match(swept.stdout, /merged into main.*\(a rejection arrived too late\)/);
   assert.ok(mainHas(dir, 'f.txt'));
 });
 
 test('a conflicting PR is held, not merged and not deleted', () => {
   const dir = featureRepo();
-  sendId(dir);
+  const id = sendId(dir);
+  openIt(dir, id);
   git(dir, 'switch', '-q', 'main');
   commit(dir, 'f.txt', 'someone else wrote this\n', 'conflicting change');
-  const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
-  assert.match(swept.stdout, /kept feat: PR held: merge conflict/);
+  const swept = snap(dir, ['sweep'], T0 + 61_000);
+  assert.match(swept.stdout, /PR [0-9a-f]{8} is held: merge conflict/);
   assert.ok(branches(dir).includes('feat'));
   assert.equal(git(dir, 'show', 'main:f.txt'), 'someone else wrote this');
   assert.equal(git(dir, 'status', '--porcelain'), '');
@@ -250,25 +258,27 @@ test('a conflicting PR is held, not merged and not deleted', () => {
 
 test('a dirty working tree on the base branch holds the merge until it is clean', () => {
   const dir = featureRepo();
-  sendId(dir);
+  const id = sendId(dir);
+  openIt(dir, id);
   git(dir, 'switch', '-q', 'main');
   writeFileSync(join(dir, 'a.txt'), 'dirty\n');
-  assert.match(snap(dir, ['sweep'], T0 + 2 * HOUR).stdout, /uncommitted changes/);
+  assert.match(snap(dir, ['sweep'], T0 + 61_000).stdout, /is held: .*uncommitted changes/);
   assert.ok(branches(dir).includes('feat'));
   git(dir, 'checkout', '-q', '--', 'a.txt');
-  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  snap(dir, ['sweep'], T0 + 62_000);
   assert.ok(mainHas(dir, 'f.txt'));
 });
 
 test('while checked out, the PR still settles but the branch waits for you to leave', () => {
   const dir = featureRepo();
-  sendId(dir);
-  const r = snap(dir, ['sweep'], T0 + 2 * HOUR);
+  const id = sendId(dir);
+  openIt(dir, id);
+  const r = snap(dir, ['sweep'], T0 + 61_000);
   assert.match(r.stdout, /feat merged into main/);
   assert.match(r.stdout, /checked out/);
   assert.ok(branches(dir).includes('feat'));
   git(dir, 'switch', '-q', 'main');
-  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  snap(dir, ['sweep'], T0 + 62_000);
   assert.ok(!branches(dir).includes('feat'));
 });
 
@@ -398,15 +408,16 @@ test('over a remote: one reader wins, anyone can reject, the sender honors it', 
   assert.equal(git(bare, 'ls-remote', '.', 'refs/heads/feat'), '');
 });
 
-test('over a remote: unrejected PRs merge, and --remote pushes the result', () => {
+test('over a remote: a PR nobody opens is deleted everywhere, along with its expired branch', () => {
   const { bare, sender } = remotes();
   const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
   const swept = snap(sender, ['sweep', '--remote', 'origin'], T0 + 2 * HOUR);
-  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it.*and was pushed`));
-  assert.equal(sh(bare, 'git', ['cat-file', '-e', 'main:f.txt']).status, 0);
+  assert.match(swept.stdout, new RegExp(`PR ${id}: nobody ever opened it`));
+  assert.ok(!mainHas(sender, 'f.txt'));
+  assert.equal(sh(bare, 'git', ['cat-file', '-e', 'main:f.txt']).status !== 0, true);
   assert.equal(git(bare, 'ls-remote', '.', 'refs/snapgit/pr/*'), '');
-  const gone = snap(sender, ['pr', 'open', id, '--screenshot']);
-  assert.match(gone.stderr, /gone/);
+  assert.equal(git(bare, 'ls-remote', '.', 'refs/heads/feat'), '');
+  assert.match(snap(sender, ['pr', 'open', id, '--screenshot']).stderr, /gone/);
 });
 
 test('if the remote cannot be reached, the merge is held rather than risking a missed rejection', () => {
@@ -484,7 +495,8 @@ function ciRepo({ check, headMsg = 'add feature', send = true, sendAt = T0, main
 }
 
 test('CI checks run against the merge result in a scratch worktree; a pass merges', () => {
-  const { dir } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
+  const { dir, id } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
+  openIt(dir, id);
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
   assert.match(swept.stdout, /feat merged into main \(1 CI check passed\)/);
   assert.ok(mainHas(dir, 'f.txt'));
@@ -514,6 +526,7 @@ test('a PR that fails CI at send time is never sent: authors are shamed and the 
 
 test('CI that goes red between send and merge shames the authors at merge time and destroys the branch at once', () => {
   const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'echo nope; exit 1' });
+  openIt(dir, id);
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
   assert.match(swept.stdout, new RegExp(`PR ${id} failed CI: "tests" exited 1`));
   assert.match(swept.stdout, /Shame on: Test/);
@@ -536,7 +549,8 @@ test('a failing PR is destroyed as soon as the fuse burns out, not only when the
 });
 
 test('agents are named and flagged in the shame message, via Co-Authored-By trailers', () => {
-  const { dir } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1', headMsg: 'add feature\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>' });
+  const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1', headMsg: 'add feature\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>' });
+  openIt(dir, id);
   snap(dir, ['sweep'], T0 + 2 * HOUR);
   const [rec] = JSON.parse(snap(dir, ['shame', '--json']).stdout);
   const byName = Object.fromEntries(rec.authors.map((a) => [a.name, a]));
@@ -576,7 +590,8 @@ test('pr checks previews the result without merging or shaming', () => {
 });
 
 test('a broken snapgit.json holds the merge instead of waving the PR through', () => {
-  const { dir } = ciRepo({ check: 'exit 0' });
+  const { dir, id } = ciRepo({ check: 'exit 0' });
+  openIt(dir, id);
   writeFileSync(join(dir, 'snapgit.json'), '{ not json');
   git(dir, 'commit', '-qam', 'break ci config');
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
@@ -586,7 +601,8 @@ test('a broken snapgit.json holds the merge instead of waving the PR through', (
 });
 
 test('snapgit.shameCommand receives the shame record as JSON on stdin', () => {
-  const { dir } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
+  const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
+  openIt(dir, id);
   const sink = join(mkdtempSync(join(tmpdir(), 'snapgit-sink-')), 'shame.json');
   git(dir, 'config', 'snapgit.shameCommand', `cat > ${sink}`);
   snap(dir, ['sweep'], T0 + 2 * HOUR);
@@ -604,6 +620,7 @@ test('over a remote, the shame reaches the other clones too', () => {
   git(dir, 'push', '-q', 'origin', 'main', 'feat');
   const sent = snap(dir, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']);
   assert.equal(sent.status, 0, sent.stdout);
+  openIt(dir, sent.stdout.match(/id ([0-9a-f]{8})/)[1]);
   writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: 'exit 1' }] }));
   git(dir, 'commit', '-qam', 'ci goes red');
   assert.match(snap(dir, ['sweep', '--remote', 'origin'], T0 + 2 * HOUR).stdout, /failed CI/);

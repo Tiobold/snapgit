@@ -1,8 +1,7 @@
-import { spawnSync } from 'node:child_process';
-import { git, run } from './git.js';
+import { git } from './git.js';
 import { now } from './time.js';
 
-const AGENT = /claude|copilot|gpt|openai|gemini|cursor|devin|codex|aider|\bbot\b|\[bot\]|agent/i;
+export const AGENT = /claude|copilot|gpt|openai|gemini|cursor|devin|codex|aider|\bbot\b|\[bot\]|agent/i;
 const SHAME = [
   'CI said no. The branch has left the building.',
   'It worked on your machine. It was the only place it worked.',
@@ -28,9 +27,16 @@ export function authorsOf(base, head, cwd) {
   return [...people.values()];
 }
 
-export function shameRecord({ rec, failure, authors }) {
-  const pick = SHAME[parseInt(rec.id.slice(0, 4), 16) % SHAME.length];
+export const isAgent = (name, email = '') => AGENT.test(`${name} ${email}`);
+
+/** The message itself, shared by the CLI and the GitHub Action. */
+export function shameMessage({ id, title, head, failure, authors }) {
+  const pick = SHAME[parseInt(String(id).slice(0, 4), 16) % SHAME.length] ?? SHAME[0];
   const who = authors.map((a) => `${a.name}${a.agent ? ' (agent)' : ''}`).join(', ');
+  return `${pick} PR ${id} "${title}" failed the "${failure.name}" check${failure.timedOut ? ' (timed out)' : ` (exit ${failure.code})`}. Shame on: ${who}. ${head} is self-destructing. Fix it and send it again.`;
+}
+
+export function shameRecord({ rec, failure, authors }) {
   return {
     v: 1,
     id: rec.id,
@@ -43,14 +49,6 @@ export function shameRecord({ rec, failure, authors }) {
     timedOut: failure.timedOut,
     output: failure.output,
     at: now(),
-    message: `${pick} PR ${rec.id} "${rec.title}" failed the "${failure.name}" check${failure.timedOut ? ' (timed out)' : ` (exit ${failure.code})`}. Shame on: ${who}. ${rec.head} is self-destructing. Fix it and send it again.`,
+    message: shameMessage({ id: rec.id, title: rec.title, head: rec.head, failure, authors }),
   };
-}
-
-/** Pipe the record, as JSON on stdin, into the user's own notifier (Slack poster, agent feed...). */
-export function notify(record, cwd) {
-  const cmd = run(['config', 'snapgit.shameCommand'], { cwd }).out.trim();
-  if (!cmd) return null;
-  const r = spawnSync('sh', ['-c', cmd], { cwd, input: JSON.stringify(record), encoding: 'utf8', timeout: 30_000 });
-  return r.status === 0 ? null : `shameCommand failed (exit ${r.status})`;
 }
