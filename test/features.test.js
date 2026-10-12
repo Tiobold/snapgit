@@ -1,4 +1,7 @@
 import { test } from 'node:test';
+
+// These tests drive checks and notifiers through a unix shell (cat, test -f, ...). Windows CI skips them.
+const UNIX = { skip: process.platform === 'win32' ? 'needs a unix shell' : false };
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -100,9 +103,11 @@ test('reviewers: only listed people can open or reject, and nobody reviews their
   assert.match(snap(bob, ['pr', 'reject', id, '-r', 'origin']).stderr, /not a reviewer/);
   assert.match(snap(sender, ['pr', 'open', id, '-r', 'origin', '--screenshot']).stderr, /not a reviewer/);
   assert.equal(snap(alice, ['pr', 'open', id, '--screenshot']).status, 0);
+  // The author can always withdraw their own PR by rejecting it.
+  assert.equal(snap(sender, ['pr', 'reject', id, '-r', 'origin', '-m', 'changed my mind']).status, 0);
 });
 
-test('reviewers: a squatter receipt and a forged rejection are ignored by the sender', () => {
+test('reviewers: a squatter receipt and a forged rejection are ignored by the sender', UNIX, () => {
   const { bare, sender, clone } = reviewerSetup();
   const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
   const alice = clone('Alice');
@@ -184,7 +189,7 @@ test('protected paths: unapproved PRs die with their branch; approve is refused 
 
 // ---------------------------------------------------------------- notifications
 
-test('notifyCommand hears about the whole life of a PR, including the halfway warning', () => {
+test('notifyCommand hears about the whole life of a PR, including the halfway warning', UNIX, () => {
   const dir = featureRepo();
   const log = join(mkdtempSync(join(tmpdir(), 'snapgit-log-')), 'events.log');
   git(dir, 'config', 'snapgit.notifyCommand', `cat >> "${log}.$SNAPGIT_EVENT"`);
@@ -215,7 +220,7 @@ test('notifyCommand hears about the whole life of a PR, including the halfway wa
   assert.match(read('expired'), /expired unopened/);
 });
 
-test('a failing notifyCommand is reported but never breaks snapgit', () => {
+test('a failing notifyCommand is reported but never breaks snapgit', UNIX, () => {
   const dir = featureRepo();
   git(dir, 'config', 'snapgit.notifyCommand', 'exit 7');
   const r = snap(dir, ['pr', 'send', '--ttl', '1h']);
@@ -223,7 +228,7 @@ test('a failing notifyCommand is reported but never breaks snapgit', () => {
   assert.match(r.stdout, /notifyCommand failed \(exit 7\)/);
 });
 
-test('slackWebhook posts a line of text', async () => {
+test('slackWebhook posts a line of text', UNIX, async () => {
   const sink = join(mkdtempSync(join(tmpdir(), 'snapgit-slack-')), 'posts.log');
   // The receiver runs in its own process: the CLI is spawned synchronously and would starve an in-process server.
   const real = spawn(process.execPath, ['-e', `

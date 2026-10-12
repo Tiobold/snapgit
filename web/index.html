@@ -24,7 +24,7 @@
   <main>
     <section id="review" class="panel" aria-labelledby="review-h">
       <h2 id="review-h">Review a PR</h2>
-      <p class="muted">Someone sent you a snapgit PR. Open it here instead of installing anything. The clock starts when you open it, and its length scales with the size of the change (about half a second per changed line, 15 seconds to an hour). Reject before it runs out, or it merges.</p>
+      <p class="muted">Someone sent you a snapgit PR. Open it here instead of installing anything. The clock starts when you open it, and its length scales with the size of the change (about half a second per changed line, 15 seconds to an hour). Reject before it runs out, or it merges. A PR nobody opens is simply deleted.</p>
 
       <form id="find" autocomplete="off">
         <label>Repository <input id="repo" name="repo" placeholder="owner/repo" spellcheck="false"></label>
@@ -65,7 +65,7 @@
 
     <section class="cards">
       <div class="card"><h3>⏳ Disappearing branches</h3><p><code>snapgit snap wip/idea --ttl 2h</code> puts a real git branch on a timer. When it runs out, it is gone, locally and on the remote.</p></div>
-      <div class="card"><h3>🚫 One button</h3><p>A PR can only be rejected. Open it and a fuse is lit, sized to the change: when it burns out, it merges into main unless you said no.</p></div>
+      <div class="card"><h3>🚫 One button</h3><p>A PR can only be rejected. Open it and a fuse is lit, sized to the change: when it burns out, it merges into main unless you said no. Never opened? It is deleted, not merged.</p></div>
       <div class="card"><h3>🔀 Merge by neglect</h3><p>No approvals, no LGTM. Silence is consent. Your sender's snapgit does the merge with plain git.</p></div>
       <div class="card"><h3>😬 CI shame</h3><p>Checks run before a PR is sent and again before it merges. Fail, and the authors (human or agent) are shamed and the branch self-destructs.</p></div>
       <div class="card"><h3>🖥️ No servers</h3><p>This page talks straight to GitHub. PRs are refs in your own repository, so there is nothing of ours to go down.</p></div>

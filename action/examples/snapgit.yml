@@ -1,0 +1,44 @@
+# Save as .github/workflows/snapgit.yml on your default branch.
+# Opt in a PR by opening it after this workflow lands, or by adding the "snapgit" label to an existing one.
+# Name every job here "snapgit..." so snapgit does not wait on its own checks.
+name: snapgit
+on:
+  pull_request_target:      # runs with a write token, and snapgit never checks out or runs PR code
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+  pull_request_review:
+    types: [submitted]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '*/5 * * * *'   # safety net, and deletes branches whose published timer ran out
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+
+jobs:
+  snapgit:
+    runs-on: ubuntu-latest
+    outputs:
+      wait-pr: ${{ steps.snapgit.outputs.wait-pr }}
+    steps:
+      - id: snapgit
+        uses: Tiobold/snapgit@master
+
+  # When a reviewer lights a fuse, this job sleeps until it burns out, then merges (or shames).
+  snapgit-wait:
+    needs: snapgit
+    if: needs.snapgit.outputs.wait-pr != ''
+    runs-on: ubuntu-latest
+    concurrency:
+      group: snapgit-wait-${{ needs.snapgit.outputs.wait-pr }}
+      cancel-in-progress: true
+    steps:
+      - uses: Tiobold/snapgit@master
+        with:
+          mode: wait
+          pr: ${{ needs.snapgit.outputs.wait-pr }}

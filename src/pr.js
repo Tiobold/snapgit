@@ -264,7 +264,8 @@ export function rejectPr(id, { cwd, remote, reason = '' }) {
   const me = ident(cwd);
   if (record) {
     const { reviewers } = reviewersFor(record, cwd);
-    if (reviewers && !isReviewer(me, reviewers)) throw new Error(`you are not a reviewer here (reviewers: ${reviewers.join(', ')})`);
+    // Reviewers may reject; the author may always withdraw their own PR.
+    if (reviewers && me !== record.author && !isReviewer(me, reviewers)) throw new Error(`you are not a reviewer here (reviewers: ${reviewers.join(', ')})`);
   }
   const rec = { id, rejector: me, rejectedAt: now(), reason };
   const ref = REJECT + id;

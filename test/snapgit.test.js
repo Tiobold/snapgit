@@ -1,4 +1,7 @@
 import { test } from 'node:test';
+
+// These tests drive checks and notifiers through a unix shell (cat, test -f, ...). Windows CI skips them.
+const UNIX = { skip: process.platform === 'win32' ? 'needs a unix shell' : false };
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
@@ -494,7 +497,7 @@ function ciRepo({ check, headMsg = 'add feature', send = true, sendAt = T0, main
   return { dir, id };
 }
 
-test('CI checks run against the merge result in a scratch worktree; a pass merges', () => {
+test('CI checks run against the merge result in a scratch worktree; a pass merges', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
   openIt(dir, id);
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
@@ -504,7 +507,7 @@ test('CI checks run against the merge result in a scratch worktree; a pass merge
   assert.equal(git(dir, 'worktree', 'list').split('\n').length, 1, 'scratch worktree cleaned up');
 });
 
-test('a PR that fails CI at send time is never sent: authors are shamed and the branch self-destructs', () => {
+test('a PR that fails CI at send time is never sent: authors are shamed and the branch self-destructs', UNIX, () => {
   const { dir } = ciRepo({ check: 'echo "boom: 1 test failed" >&2; exit 3', send: false });
   git(dir, 'switch', '-q', 'feat');
   const r = snap(dir, ['pr', 'send', '--ttl', '1h']);
@@ -524,7 +527,7 @@ test('a PR that fails CI at send time is never sent: authors are shamed and the 
   assert.equal(list[0].exitCode, 3);
 });
 
-test('CI that goes red between send and merge shames the authors at merge time and destroys the branch at once', () => {
+test('CI that goes red between send and merge shames the authors at merge time and destroys the branch at once', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'echo nope; exit 1' });
   openIt(dir, id);
   const swept = snap(dir, ['sweep'], T0 + 2 * HOUR);
@@ -539,7 +542,7 @@ test('CI that goes red between send and merge shames the authors at merge time a
   assert.match(snap(dir, ['shame']).stdout, /nobody has been shamed/);
 });
 
-test('a failing PR is destroyed as soon as the fuse burns out, not only when the branch timer ends', () => {
+test('a failing PR is destroyed as soon as the fuse burns out, not only when the branch timer ends', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
   git(dir, 'switch', '-q', 'main');
   assert.equal(snap(dir, ['pr', 'open', id, '--screenshot']).status, 0);
@@ -548,7 +551,7 @@ test('a failing PR is destroyed as soon as the fuse burns out, not only when the
   assert.ok(!branches(dir).includes('feat'));
 });
 
-test('agents are named and flagged in the shame message, via Co-Authored-By trailers', () => {
+test('agents are named and flagged in the shame message, via Co-Authored-By trailers', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1', headMsg: 'add feature\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>' });
   openIt(dir, id);
   snap(dir, ['sweep'], T0 + 2 * HOUR);
@@ -559,7 +562,7 @@ test('agents are named and flagged in the shame message, via Co-Authored-By trai
   assert.match(rec.message, /Claude Sonnet \(agent\)/);
 });
 
-test('a PR cannot switch off its own CI: checks come from the base branch', () => {
+test('a PR cannot switch off its own CI: checks come from the base branch', UNIX, () => {
   const dir = repo();
   writeFileSync(join(dir, 'required.txt'), 'must exist\n');
   writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'guard', run: 'test -f required.txt' }] }));
@@ -575,7 +578,7 @@ test('a PR cannot switch off its own CI: checks come from the base branch', () =
   assert.match(r.stdout, /not sent: feat failed CI.*"guard"/);
 });
 
-test('pr checks previews the result without merging or shaming', () => {
+test('pr checks previews the result without merging or shaming', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'test -f f.txt && test -f base.txt' });
   const ok = snap(dir, ['pr', 'checks', id]);
   assert.equal(ok.status, 0, ok.stderr);
@@ -600,7 +603,7 @@ test('a broken snapgit.json holds the merge instead of waving the PR through', (
   assert.ok(!mainHas(dir, 'f.txt'));
 });
 
-test('snapgit.shameCommand receives the shame record as JSON on stdin', () => {
+test('snapgit.shameCommand receives the shame record as JSON on stdin', UNIX, () => {
   const { dir, id } = ciRepo({ check: 'exit 0', mainCheck: 'exit 1' });
   openIt(dir, id);
   const sink = join(mkdtempSync(join(tmpdir(), 'snapgit-sink-')), 'shame.json');
@@ -612,7 +615,7 @@ test('snapgit.shameCommand receives the shame record as JSON on stdin', () => {
   assert.ok(Array.isArray(got.authors));
 });
 
-test('over a remote, the shame reaches the other clones too', () => {
+test('over a remote, the shame reaches the other clones too', UNIX, () => {
   const bare = mkdtempSync(join(tmpdir(), 'snapgit-bare-'));
   git(bare, 'init', '-q', '--bare', '-b', 'main');
   const { dir } = ciRepo({ check: 'exit 0', send: false });

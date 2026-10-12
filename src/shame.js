@@ -30,10 +30,10 @@ export function authorsOf(base, head, cwd) {
 export const isAgent = (name, email = '') => AGENT.test(`${name} ${email}`);
 
 /** The message itself, shared by the CLI and the GitHub Action. */
-export function shameMessage({ id, title, head, failure, authors }) {
+export function shameMessage({ id, label = `PR ${id}`, title, head, failure, authors }) {
   const pick = SHAME[parseInt(String(id).slice(0, 4), 16) % SHAME.length] ?? SHAME[0];
   const who = authors.map((a) => `${a.name}${a.agent ? ' (agent)' : ''}`).join(', ');
-  return `${pick} PR ${id} "${title}" failed the "${failure.name}" check${failure.timedOut ? ' (timed out)' : ` (exit ${failure.code})`}. Shame on: ${who}. ${head} is self-destructing. Fix it and send it again.`;
+  return `${pick} ${label} "${title}" failed the "${failure.name}" check${failure.timedOut ? ' (timed out)' : failure.code === undefined || failure.code === null ? '' : ` (exit ${failure.code})`}. Shame on: ${who}. ${head} is self-destructing. Fix it and send it again.`;
 }
 
 export function shameRecord({ rec, failure, authors }) {

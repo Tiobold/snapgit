@@ -1,17 +1,44 @@
 {
   "name": "snapgit",
-  "version": "0.1.0",
-  "description": "Git meets Snapchat. Disappearing branches, view-once pull requests, and commit streaks.",
+  "version": "0.2.0",
+  "description": "Git meets Snapchat: self-destructing branches, pull requests with one button (reject, or it merges), CI shame, undo, and a GitHub Action.",
   "type": "module",
   "bin": {
     "snapgit": "bin/snapgit.js"
   },
   "scripts": {
     "test": "node --test \"test/*.test.js\"",
-    "test:e2e": "node test/e2e.web.mjs"
+    "test:e2e": "node test/e2e.web.mjs",
+    "prepublishOnly": "npm test"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "git",
+    "pull-request",
+    "code-review",
+    "ci",
+    "ai",
+    "agents",
+    "snapchat",
+    "ephemeral-branches"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tiobold/snapgit.git"
+  },
+  "homepage": "https://github.com/Tiobold/snapgit#readme",
+  "bugs": {
+    "url": "https://github.com/Tiobold/snapgit/issues"
+  },
+  "files": [
+    "bin",
+    "src",
+    "action",
+    "action.yml",
+    "README.md",
+    "LICENSE"
+  ]
 }

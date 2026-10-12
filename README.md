@@ -1,131 +1,161 @@
 # snapgit
 
-Git meets Snapchat. A joke, but every feature really works, on top of plain git. Zero dependencies, Node 20+.
+Git meets Snapchat. Branches that disappear, pull requests with one button, CI that shames the author and
+deletes the branch, and an undo for everything. A joke with a pitch (AI writes PRs in minutes, review takes days),
+but every feature really works, on plain git or on real GitHub PRs.
 
 ```
-npm link            # puts `snapgit` on your PATH (or run node bin/snapgit.js)
-snapgit init        # optional: hooks so expired branches vanish on their own
+npx snapgit help          # or: npm i -g snapgit        (Node 20+; this repo: npm link)
+snapgit init              # hooks, so sweeping happens by itself
 ```
 
-## Disappearing branches
+## The model in four rules
+
+1. **Every branch has a timer** (24h by default, chosen once, never extended). When it runs out it is deleted.
+2. **A PR has one button: reject.** There is no approve. A reviewer *opens* it, which lights a **fuse sized to the change**
+   (10s + 0.5s per changed line, 15s to 1h). Unrejected when the fuse burns out, it **merges**.
+3. **Nobody looks, nothing merges.** A PR that is never opened is **deleted** when its branch expires. Silence from a
+   whole team never ships code.
+4. **CI is law.** Checks run when you send and again before the merge. Fail, and the authors (human or agent) are
+   shamed and the branch self-destructs. Everything is recoverable (`undo`, `resurrect`).
+
+## Branches
 
 ```
 snapgit snap wip/spike              # git switch -c, plus a self-destruct timer (24h by default)
-snapgit snap wip/spike --ttl 2h     # pick another timer, once, at creation
+snapgit snap wip/spike --ttl 2h     # choose once, at creation
 snapgit ls                          # what's on the clock
-snapgit sweep [--remote origin]     # delete everything expired (also the remote branch)
+snapgit sweep [-r origin]           # delete everything expired (and expired remote branches)
+snapgit watch [-r origin]           # keep sweeping every few seconds
+snapgit init                        # git hooks that sweep after commit/checkout/merge (offline)
 git config snapgit.defaultTtl 8h    # change the default for this repo
 ```
 
-Every snap has a timer, and **timers can never be extended or removed**: there is no `extend` and no `keep`. Sending a PR for a
-branch that has no timer puts it on the clock with the default, and `pr send --ttl` is refused for a branch that already has one.
-(snapgit only puts timers on branches made with `snap` or sent with `pr send`; it never starts a timer on a branch you already have.)
+There is no `extend` and no `keep`. snapgit only puts timers on branches made with `snap` or sent with `pr send`; it never
+starts a timer on a branch you already have. Protected branches (main, master, trunk, develop, the origin default) can't get one,
+and a checked-out branch waits until you leave it.
 
-The timer lives in your git config (`branch.<name>.snapgit-expires`). Expiry is enforced by `sweep`, which runs from the git
-hooks `snapgit init` installs and every time you run `snapgit ls`. Protected branches (main, master, trunk, develop, the origin
-default) can't get a timer, and a checked-out branch is never deleted, it just waits for you to leave. Ghosting prints the old tip
-so `git branch <name> <sha>` brings it back (until git gc).
+**Any runner can enforce a timer.** `snapgit push` (and `pr send -r`) publishes the timer as `refs/snapgit/timer/<branch>`.
+Then `snapgit sweep -r origin` on *any* machine, or the GitHub Action, deletes the expired branch. Timers are immutable on the
+remote. Branches with a live PR are left to their PR.
 
-## Pull requests with one button
-
-```
-snapgit pr send feat -m "Add feature\nlook at this" -r origin   # ask for a merge; puts the branch on the clock
-snapgit pr open <id> -r origin                                  # view the changed code; lights a fuse sized to the change
-snapgit pr reject <id> -m "no" -r origin                        # the only button there is
-snapgit pr ls -r origin                                         # live PRs
-snapgit pr burn <id> -r origin                                  # sender withdraws it (nothing merges)
-snapgit watch -r origin                                         # keep sweeping so fuses burn on time
-```
-
-There is no approve. A PR can only be rejected. **It merges one fuse after it is first opened unless rejected**, or, if nobody
-ever opens it, when its branch expires, whichever comes first. The opener can re-read the changed code until the fuse runs out;
-nobody else can open it (they can still reject). The branch deadline can't be moved.
-
-**The fuse is proportional to the size of the change**: `10s + 0.5s per changed line`, at least 15s and at most 1h. So a one-line
-fix gets 15 seconds, 100 lines get a minute, 500 lines get 4m 20s, and a 30,000 line PR gets the one-hour ceiling. It is computed
-when the PR is sent and stored in the PR, so the CLI and the web UI always agree. Tune it per repo:
+## Pull requests
 
 ```
-git config snapgit.fuseSecPerLine 1     # seconds per changed line (default 0.5)
-git config snapgit.fuseBaseSec 10       # fixed part (default 10)
-git config snapgit.fuseMinSec 15        # floor (default 15)
-git config snapgit.fuseMaxSec 3600      # ceiling (default 3600)
+snapgit pr send [branch] -m "title\nbody" -r origin   # CI runs first; the branch goes on the clock
+snapgit pr open <id> -r origin       # read the changes; lights the fuse. Only the opener can re-read it
+snapgit pr reject <id> -m "no"       # the only button
+snapgit pr approve <id>              # only for PRs touching protectedPaths (see below)
+snapgit pr ls | checks <id> | receipts | burn <id>
 ```
 
-(PRs sent by older versions have no stored fuse and keep a flat minute. Lines are added plus deleted; binary files count as zero.)
+A reviewer opens a PR and the clock starts. Opening gives *them* the changed code and nobody else (a second person is
+locked out of reading but can still reject). When the fuse burns out the sender's `sweep` / `watch` merges it: a
+plumbing merge (`merge-tree` + `commit-tree`) if the base isn't checked out, a fast-forward of the merge commit if it is
+and the tree is clean. Conflicts, a dirty base, or an unreachable remote **hold** the merge and keep the branch. Add
+`--remote` to also push the result. A rejection only counts if it arrived before the fuse burned out. Piping `pr open`
+(a screenshot, in spirit) is refused unless you pass `--screenshot`, which opens it anyway and records that you did.
 
-The merge is done by the sender's machine: `snapgit sweep` (or `snapgit watch`, which sweeps every few seconds) sees the receipt,
-merges, and deletes the branch. The git hooks from `snapgit init` sweep offline, so they settle local PRs and leave PRs that
-live on a remote to an online `sweep`/`watch`.
+**Read receipts**: `pr receipts` lists who opened your PRs, when, and whether they screenshotted.
 
-How the merge happens: with the base branch not checked out it is a plumbing merge (`merge-tree` + `commit-tree`), so no
-working tree is touched. With the base checked out it is a normal `git merge --no-ff`, but only if the tree is clean. Conflicts,
-a dirty base, or a remote that can't be reached to check for a rejection all **hold** the merge: nothing merges and the branch
-is *not* deleted, and every sweep says why. A rejection counts only if it was made before the deadline. Add `--remote`
-(`snapgit sweep --remote origin`) to also push the merged base and delete the remote branch.
+## Rules: `snapgit.json` on the base branch
 
-A PR is a JSON blob under `refs/snapgit/pr/<id>`. The first opener claims `refs/snapgit/receipt/<id>` with a create-only push
-(only one racer succeeds); its timestamp starts the fuse. Recipients keep no local copy. Piping the output (a screenshot, in
-spirit) is refused without opening, unless you pass `--screenshot`, which opens it anyway and records that you took one.
-
-Honest caveat: the patch stays readable in the ref and in the sender's repo, so "only the opener can read it" is a rule of
-the tool, not encryption.
-
-## CI checks, and shame
-
-Put a `snapgit.json` on the **base** branch:
+The file lives on the **base** branch, so a PR can't rewrite its own rules. No file means defaults.
 
 ```json
-{ "checks": [{ "name": "tests", "run": "npm ci && npm test", "timeoutSec": 300 }] }
+{
+  "checks": [{ "name": "tests", "run": "npm ci && npm test", "timeoutSec": 300 }],
+  "fuse": {
+    "baseSec": 10, "secPerLine": 0.5, "minSec": 15, "maxSec": 3600,
+    "ignore": ["package-lock.json", "**/*.lock", "dist/"],
+    "weights": [{ "glob": "migrations/**", "multiplier": 3 }, { "glob": "**/*.md", "multiplier": 0.25 }]
+  },
+  "reviewers": ["@alice", "bob@example.com"],
+  "protectedPaths": ["auth/**", "infra/**"],
+  "mergeMethod": "squash", "ttlHours": 24, "frozen": false
+}
 ```
 
-Checks run twice: when you `snapgit pr send` (fail fast, before any human or agent has to look at it) and again right before the
-merge, against the *merge result*, in a throwaway worktree so your own tree is never touched. `snapgit pr checks <id>` previews them
-without consequences. The config is read from the base branch, so a PR cannot switch off its own CI. No file means no checks; a
-malformed file holds the merge.
+`snapgit policy` prints what applies. A malformed file **holds** merges instead of guessing.
 
-If a check fails (or times out), nothing merges, and:
+- **Fuse sizing.** Lockfiles and build output (`ignore`) count for nothing; `weights` make a migration count triple and a
+  README a quarter. A one-line fix gets 15 seconds, 100 lines a minute, 500 lines 4m 20s, a 30,000 line PR the one-hour ceiling.
+  `git config snapgit.fuseSecPerLine 1` (and `fuseBaseSec`, `fuseMinSec`, `fuseMaxSec`) override the file locally.
+- **Reviewers.** When set, only they can open, reject or approve; nobody reviews their own PR; and a receipt or rejection
+  left by a non-reviewer is ignored when the sender settles (so nobody can squat a PR or forge a veto). Use `"reviewers":
+  "CODEOWNERS"` to take the individual owners from the base branch's CODEOWNERS. Set `git config snapgit.githubLogin <you>`
+  so the CLI identifies you the way the web UI does.
+- **Protected paths.** PRs touching them don't merge by silence: a reviewer must `pr approve`. Unapproved when the branch
+  expires, they are deleted. This is the one exception to "no approve".
 
-- the people who wrote the branch are **shamed**: every commit author plus `Co-Authored-By` trailers, with agents (Claude, Copilot,
-  Cursor, bots...) flagged as such, the failing check's output, and a message that is not subtle;
-- the branch **self-destructs** immediately, not when its timer ends (the old tip is printed so it can be recovered);
-- the record is stored as `refs/snapgit/shame/<id>` and pushed to the remote when there is one. Read it with `snapgit shame`
-  (`--json` for an agent to consume, `--clear` to dismiss) from any clone;
-- if `git config snapgit.shameCommand '<cmd>'` is set, the record is piped to it as JSON on stdin, so you can post it to Slack or
-  hand it back to the coding agent that wrote the change.
+## CI checks and shame
 
-Checks execute the PR's code on the machine that sweeps, like any CI runner would, and they run inside the git hooks too, so keep them
-quick or let `snapgit watch` do the sweeping.
+Checks run at `pr send` (fail fast, before anyone looks) and again right before the merge, against the **merge result**
+in a throwaway worktree (your own tree is never touched). `pr checks <id>` previews them. If one fails or times out:
 
-## Read receipts
+- nothing merges; the people who wrote it are **shamed** (commit authors plus `Co-Authored-By` trailers, agents such as
+  Claude, Copilot and Cursor flagged) with the failing output;
+- the branch **self-destructs** now, not at its timer (recoverable, see below);
+- the record is published as `refs/snapgit/shame/<id>`: `snapgit shame` (`--json` for an agent, `--clear` to dismiss) from any clone.
 
-Opening a PR also writes a receipt (`refs/snapgit/receipt/<id>`) saying who opened it, when, and whether they screenshotted.
-`snapgit pr receipts` lists the receipts for PRs you sent. Receipts addressed to other people are never shown by you.
-They are removed when the PR settles.
+Checks run the PR's code on the machine that sweeps, like any CI runner, and they run inside the git hooks too: keep them
+quick, or let `snapgit watch` or the Action do the sweeping.
 
-## Streaks and stories
+## Safety nets
 
-`snapgit streak` counts consecutive days with a commit by you, across all branches. Commit yesterday and you're still alive.
-`snapgit story [--since 24h]` summarises your last day: commits, branches on the clock, pending PRs. It is not saved anywhere.
+```
+snapgit undo <id> [--push -r origin]  # revert a snapgit merge: a revert commit on top, history never rewritten
+snapgit merged                        # the ledger undo works from
+snapgit graveyard / resurrect <name>  # ghosted branches stay reachable for 30 days (snapgit.graveyardDays)
+snapgit freeze [reason] [-r origin]   # kill switch: nothing merges, nothing disappears (also for other runners)
+snapgit thaw [-r origin]
+```
 
-## Tests
+`undo` refuses (and changes nothing) if later work makes the revert conflict. A resurrected branch gets a fresh timer:
+nothing escapes the clock. Frozen items that came due settle at the next sweep after `thaw`.
 
-`npm test` runs against real temporary repos, including two clones racing to open the same PR. `SNAPGIT_NOW` (epoch ms)
-overrides the clock for time travel.
+## Notifications
 
-## The web interface
+```
+git config snapgit.slackWebhook https://hooks.slack.com/...      # one line of text per event
+git config snapgit.notifyCommand 'curl -s -X POST ... -d @-'     # event JSON on stdin, $SNAPGIT_EVENT in the env
+```
 
-`web/` is a static site for reviewing PRs in a browser (open, read the diff, size-based countdown, reject), plus a demo
-sandbox. It talks only to the GitHub API, so there is nothing to run. See `web/README.md` for the Vercel steps.
+Events: `sent`, `opened`, `halfway` (half the fuse is gone), `merged`, `rejected`, `shamed`, `expired`, `held`, `undone`.
+A failing notifier is reported but never breaks snapgit. `snapgit.shameCommand` (shamed only) still works, which is how
+you hand the failure back to the coding agent that wrote the change.
 
-## The video
+## On real GitHub PRs: the Action
 
-`docs/video/snapgit-tiktok.mp4` is a 99 second 1080x1920 pitch for TikTok (over a minute, which creator monetization needs):
-leadership wants more AI, review is the bottleneck, GitHub keeps going down, and snapgit's answer. It is built from
-`docs/video/scenes.json`: HTML slides, headless Chromium screenshots, offline Kokoro narration (`am_michael` at 1.12x, with
-compression and loudness normalisation; `VOICE=` and `SPEED=` override), and ffmpeg. The terminal slides are real captured output.
-Acronyms are spoken as letter names via explicit phonemes, and `[pause 1.4]` in a narration inserts real silence.
+Most teams review in GitHub, so `action.yml` applies the same rules to ordinary PRs, with no server: a reviewer says
+`/snapgit open` (or submits a review), the PR merges when its fuse burns out unless a reviewer says `/snapgit reject` (or
+requests changes), CI is GitHub's own checks, and `/snapgit undo` opens a GitHub revert PR. Unopened PRs are closed and
+their branches deleted; shamed PRs too. See [action/README.md](action/README.md) for the workflow to paste in.
 
-Rebuild with `PYTHON=<python with kokoro-onnx soundfile pillow> docs/video/build.sh` (needs node, ffmpeg, Chromium; the first run
-downloads ~350 MB of voice models). Caption and hashtags: `docs/video/tiktok-caption.txt`. The outage figures come from press
-and third-party trackers.
+## Web
+
+`web/` is a static site (deploy on Vercel with root directory `web`): review a PR in a browser, with a size-based countdown,
+by talking to the GitHub API. See [web/README.md](web/README.md).
+
+## For fun
+
+`snapgit streak` (commit streak) and `snapgit story` (your last day in git, which will not be saved).
+
+## Tests, platforms, the video
+
+`npm test` runs ~95 tests against real temporary git repos, two clones racing, and the Action against an in-memory GitHub
+served over HTTP. `npm run test:e2e` drives the web UI in Chromium. CI runs on Linux, macOS and Windows; tests that need a unix
+shell (`cat`, `test -f`) skip on Windows. `SNAPGIT_NOW` (epoch ms) overrides the clock; `SNAPGIT_FUSE_MS` pins the fuse.
+
+`docs/video/snapgit-tiktok.mp4` is the 99 second 1080x1920 pitch, built by `docs/video/build.sh` from `scenes.json` (HTML
+slides, headless Chromium, offline Kokoro narration, ffmpeg). Caption and hashtags: `docs/video/tiktok-caption.txt`.
+
+## Honest limits
+
+- The sender's machine (or the Action) merges. A closed laptop with no Action merges nothing, and a 15-second fuse needs
+  something awake to notice it.
+- "Only the opener can read it" is a rule of the tool, not encryption: the patch sits readable in the PR ref.
+- Clocks come from each machine. Heavy skew shifts a fuse.
+- GitHub mode can't merge past branch protection that demands approving reviews: relax it for snapgit PRs or let the
+  bot bypass it, and see "Honest limits" in the Action README.
+- The outage figures in the video come from press and third-party trackers.

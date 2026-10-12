@@ -1,0 +1,33 @@
+name: snapgit
+description: Fuse-based PRs on real GitHub PRs. Reviewers light a fuse sized to the change; it merges unless rejected; CI failures shame the authors.
+author: Tiobold
+branding:
+  icon: clock
+  color: yellow
+inputs:
+  token:
+    description: Token with contents/pull-requests/issues write and checks/statuses read.
+    default: ${{ github.token }}
+  mode:
+    description: "auto (react to the event), sweep (settle everything and delete expired branches), or wait (sleep until a PR's fuse burns out, then settle it)."
+    default: auto
+  pr:
+    description: PR number, for mode wait.
+    default: ''
+  max-wait:
+    description: Seconds a wait job may sleep before the scheduled sweep takes over.
+    default: '21000'
+  poll-seconds:
+    description: How often a wait job re-checks the PR.
+    default: '20'
+  ignore-checks:
+    description: Comma-separated check-name prefixes snapgit must not wait on (its own jobs).
+    default: snapgit
+outputs:
+  wait-pr:
+    description: Set when this run lit a fuse: the PR number a follow-up wait job should watch.
+  wait-until:
+    description: When that PR's fuse burns out (epoch milliseconds).
+runs:
+  using: node20
+  main: action/index.js

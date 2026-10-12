@@ -6,7 +6,8 @@ import { git } from './git.js';
 const MARK = '# snapgit-hook';
 const HOOKS = ['post-commit', 'post-checkout', 'post-merge'];
 const BIN = resolve(dirname(fileURLToPath(import.meta.url)), '../bin/snapgit.js');
-const LINE = `${MARK}\n"${process.execPath}" "${BIN}" sweep --quiet --offline || true\n`;
+const fwd = (p) => p.replace(/\\/g, '/'); // Git for Windows runs hooks with sh, which wants forward slashes
+const LINE = `${MARK}\n"${fwd(process.execPath)}" "${fwd(BIN)}" sweep --quiet --offline || true\n`;
 
 /** Install hooks so expired branches vanish without anyone having to remember. */
 export function installHooks(cwd) {

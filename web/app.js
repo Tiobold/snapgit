@@ -70,6 +70,7 @@ function render() {
 
   let status;
   if (rejectedInTime) status = `🚫 Rejected by ${rejection.rejector}${rejection.reason ? `: “${rejection.reason}”` : ''}. Nothing will merge.`;
+  else if (over && !receipt) status = '💨 Nobody opened it in time, so it is deleted. Nothing merges on a timer alone.';
   else if (over) status = state.backend.demo
     ? `🔀 The fuse burned out and nobody rejected it. In real life the sender's snapgit merges ${record.head} into ${record.base} now. (This was the demo sandbox, nothing was merged.)`
     : `🔀 Too late. Nobody rejected it, so the sender's snapgit merges ${record.head} into ${record.base} the next time it sweeps.`;
