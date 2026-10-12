@@ -93,6 +93,7 @@ export function demoRecord(now = Date.now()) {
     createdAt: now,
     expiresAt: now + 24 * 3600_000,
     lines: 6,
+    validated: { at: now, checks: 2 },
     fuseMs: 60_000, // pinned so the demo always lasts a minute
     commits: ['a1b2c3d make the button bigger', '9f8e7d6 add the ghost emoji'],
     stat: ' src/login.js | 6 +++---\n 1 file changed, 3 insertions(+), 3 deletions(-)',

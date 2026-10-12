@@ -9,6 +9,9 @@ on:
     types: [submitted]
   issue_comment:
     types: [created]
+  check_suite:              # a finished CI run unlocks (or shames) its PR straight away
+    types: [completed]
+  status:
   schedule:
     - cron: '*/5 * * * *'   # safety net, and deletes branches whose published timer ran out
   workflow_dispatch:

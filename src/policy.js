@@ -11,11 +11,12 @@ import { run } from './git.js';
  *   "protectedPaths": ["auth/**", "infra/**"],          // these also need an explicit approval
  *   "mergeMethod":    "merge" | "squash" | "rebase",    // GitHub Action only
  *   "ttlHours":       24,                               // GitHub Action only: PR lifetime
- *   "frozen":         false                             // GitHub Action only: kill switch
+ *   "frozen":         false,                            // GitHub Action only: kill switch
+ *   "requireChecks":  false                             // GitHub Action only: no checks at all is NOT validation
  * }
  */
 export const DEFAULT_POLICY = Object.freeze({
-  checks: [], fuse: {}, reviewers: null, protectedPaths: [], mergeMethod: 'merge', ttlHours: 24, frozen: false,
+  checks: [], fuse: {}, reviewers: null, protectedPaths: [], mergeMethod: 'merge', ttlHours: 24, frozen: false, requireChecks: false,
 });
 
 const bad = (label, msg) => { throw new Error(`snapgit.json on ${label}${/^(is|must) /.test(msg) ? ' ' : ': '}${msg}`); };
@@ -60,6 +61,7 @@ export function parsePolicy(text, label = 'base') {
     p.ttlHours = cfg.ttlHours;
   }
   if (cfg.frozen !== undefined) p.frozen = !!cfg.frozen;
+  if (cfg.requireChecks !== undefined) p.requireChecks = !!cfg.requireChecks;
   return p;
 }
 

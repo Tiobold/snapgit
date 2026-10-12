@@ -1,6 +1,6 @@
 import { git, run, currentBranch, branchExists, protectedBranches } from './git.js';
 import { now, parseDuration } from './time.js';
-import { bury, pruneGraveyard } from './graveyard.js';
+import { bury, buryRemoteTip, pruneGraveyard } from './graveyard.js';
 import { frozenReason } from './freeze.js';
 
 const key = (name) => `branch.${name}.snapgit-expires`;
@@ -101,6 +101,7 @@ export function sweep({ cwd, remote = null, dryRun = false, settle = () => ({ ev
     let remoteGone = false;
     if (remote) {
       if (run(['ls-remote', '--exit-code', '--heads', remote, snap.name], { cwd }).ok) {
+        buryRemoteTip(remote, snap.name, cwd); // the remote tip may hold commits that were never pulled
         remoteGone = run(['push', remote, '--delete', snap.name], { cwd }).ok;
       }
       if (run(['ls-remote', '--exit-code', remote, `refs/snapgit/timer/${snap.name}`], { cwd }).ok) {

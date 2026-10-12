@@ -18,6 +18,21 @@ export function bury(name, cwd) {
   return ref;
 }
 
+/**
+ * Before deleting a branch on a remote, keep its remote tip too (it can hold commits nobody pulled yet).
+ * Returns true if a grave was dug.
+ */
+export function buryRemoteTip(remote, name, cwd) {
+  const r = run(['ls-remote', '--heads', remote, name], { cwd });
+  const sha = r.ok ? r.out.split('\t')[0].trim() : '';
+  if (!sha) return false;
+  if (!run(['cat-file', '-e', `${sha}^{commit}`], { cwd }).ok && !run(['fetch', '--quiet', remote, name], { cwd }).ok) return false;
+  if (!run(['cat-file', '-e', `${sha}^{commit}`], { cwd }).ok) return false;
+  if (graves(cwd).some((g) => g.sha === sha)) return true;
+  git(['update-ref', `${PREFIX}${now()}-${name}`, sha], { cwd });
+  return true;
+}
+
 /** [{ ref, name, sha, buriedAt }], newest first. */
 export function graves(cwd) {
   const out = run(['for-each-ref', '--format=%(refname) %(objectname)', PREFIX], { cwd }).out;

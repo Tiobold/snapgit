@@ -14,11 +14,11 @@ before(async () => { fake = await createFakeGitHub(); });
 after(async () => { await fake.close(); });
 
 /** A fresh PR on the fake, with an engine whose clock the test controls. */
-async function scenario({ policy, pr: prOpts, open = true, ignoreChecks } = {}) {
+async function scenario({ policy, pr: prOpts, open = true, ignoreChecks, ciGraceMs = 0 } = {}) {
   const f = await createFakeGitHub();
   const clock = { t: T0 };
   const gh = new GitHub({ token: 't', repo: f.repo, apiUrl: f.url });
-  const engine = createEngine({ gh, now: () => clock.t, ignoreChecks });
+  const engine = createEngine({ gh, now: () => clock.t, ignoreChecks, ciGraceMs });
   if (policy) f.setPolicy(policy);
   const pr = f.addPull(prOpts);
   if (open) await engine.onPullRequest(pr, 'opened');
@@ -37,7 +37,7 @@ test('a new PR goes on the clock: fuse sized to the change, ignored files uncoun
   assert.equal(st.fuseMs, 60_000);
   assert.equal(st.expiresAt, T0 + 24 * 3600_000);
   assert.match(s.f.statusLine(s.n), /100 changed lines \(4003 more in ignored files\) = a 1m fuse/);
-  assert.match(s.f.statusLine(s.n), /\/snapgit open/);
+  assert.match(s.f.statusLine(s.n), /Waiting for CI/);
   await s.close();
 });
 
@@ -114,9 +114,9 @@ test('reject: a reviewer comment or a "changes requested" review closes the PR; 
   await s.close();
 
   const r = await scenario({ policy: { reviewers: ['@alice', '@carol'], ...fuse1m } });
-  await r.engine.onReview(r.n, { user: { login: 'carol', type: 'User' }, state: 'COMMENTED', body: '' });
+  await r.engine.onReview(r.n, { user: { login: 'carol', type: 'User' }, author_association: 'MEMBER', state: 'COMMENTED', body: '' });
   assert.equal(r.f.state(r.n).openedBy, 'carol'); // any review from a reviewer opens it
-  await r.engine.onReview(r.n, { user: { login: 'carol', type: 'User' }, state: 'CHANGES_REQUESTED', body: 'nope' });
+  await r.engine.onReview(r.n, { user: { login: 'carol', type: 'User' }, author_association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'nope' });
   assert.equal(r.f.db.pulls.get(r.n).state, 'closed');
   await r.close();
 
@@ -152,17 +152,17 @@ test('a PR nobody opens is closed and its branch deleted when its lifetime ends'
   await s.close();
 });
 
-test('failing CI shames the authors (agents flagged), closes the PR and deletes the branch', async () => {
+test('failing CI shames the authors (agents flagged) straight away, before anyone has to look', async () => {
+  const sha = 'a'.repeat(40);
   const s = await scenario({
     policy: fuse1m,
     pr: {
-      head: 'ai-login', sha: 'a'.repeat(40),
+      head: 'ai-login', sha,
       commits: [{ author: { login: 'dev' }, commit: { message: 'ai: rewrite login\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>', author: { name: 'Dev', email: 'dev@example.com' } } }],
     },
   });
-  s.f.setChecks('a'.repeat(40), { runs: [{ name: 'tests', status: 'completed', conclusion: 'failure', output: { summary: 'login() returned undefined' } }] });
-  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
-  s.clock.t = T0 + 60_000;
+  s.f.setChecks(sha, { runs: [{ name: 'tests', status: 'completed', conclusion: 'failure', output: { summary: 'login() returned undefined' } }] });
+  // Nobody opened it and no fuse was lit: validation alone condemns it.
   assert.equal(await s.engine.settleOne(s.n), 'done');
   const shame = s.f.botComments(s.n).find((c) => c.body.startsWith('😬')).body;
   assert.match(shame, /Shame on: Dev, Claude Sonnet \(agent\)/);
@@ -173,14 +173,76 @@ test('failing CI shames the authors (agents flagged), closes the PR and deletes 
   assert.ok(s.f.db.labels.get(s.n).has('snapgit:shamed'));
   assert.ok(!s.f.db.branches.has('ai-login'));
   assert.equal(s.f.db.merges.length, 0);
+  assert.equal(s.f.state(s.n).openedAt, undefined);
   await s.close();
 });
 
-test('CI still running holds the merge (once) and merging resumes when it passes; snapgit ignores its own jobs', async () => {
-  const sha = 'b'.repeat(40);
-  const s = await scenario({ policy: fuse1m, pr: { sha } });
-  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'in_progress' }, { name: 'snapgit-wait', status: 'in_progress' }] });
+test('CI that goes red after the fuse was lit still shames at burn-out, and never merges', async () => {
+  const sha = 'd'.repeat(40);
+  const s = await scenario({ policy: fuse1m, pr: { sha, head: 'late-red' } });
+  s.f.setChecks(sha, { runs: [{ name: 'tests', status: 'completed', conclusion: 'success' }] });
   await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.ok(s.f.state(s.n).openedAt);
+  s.f.setChecks(sha, { runs: [{ name: 'tests', status: 'completed', conclusion: 'failure', output: { summary: 'flaky no more' } }] });
+  s.clock.t = T0 + 60_000;
+  assert.equal(await s.engine.settleOne(s.n), 'done');
+  assert.equal(s.f.db.merges.length, 0);
+  assert.ok(!s.f.db.branches.has('late-red'));
+  await s.close();
+});
+
+test('review is locked until CI has run: no fuse while it is pending, and the bot says when it is ready', async () => {
+  const sha = 'b'.repeat(40);
+  const s = await scenario({ policy: { reviewers: ['@alice'], ...fuse1m }, pr: { sha } });
+  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'in_progress' }, { name: 'snapgit-wait', status: 'in_progress' }] });
+  assert.match(s.f.statusLine(s.n), /Waiting for CI.*locked until validation passes/);
+
+  const early = await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.equal(early.waitFor, undefined);
+  assert.equal(s.f.state(s.n).openedAt, undefined);
+  assert.match(s.f.lastBotText(s.n), /not yet: CI is still running.*no fuse yet/);
+  await s.engine.onReview(s.n, { user: { login: 'alice', type: 'User' }, author_association: 'MEMBER', state: 'COMMENTED', body: '' });
+  assert.equal(s.f.state(s.n).openedAt, undefined); // a review cannot sneak past the lock either
+
+  // CI finishes (snapgit's own running job is ignored): the check_suite event unlocks it, once.
+  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'completed', conclusion: 'success' }, { name: 'snapgit-wait', status: 'in_progress' }] });
+  await s.engine.onChecks(sha);
+  await s.engine.onChecks(sha);
+  assert.ok(s.f.state(s.n).ciPassedAt);
+  assert.equal(s.f.botComments(s.n).filter((c) => !c.body.startsWith('<!--') && /CI passed. This PR is ready for review/.test(c.body)).length, 1);
+  assert.match(s.f.statusLine(s.n), /CI passed.*Waiting for a reviewer/);
+
+  const r = await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.ok(r.waitFor); // the fuse is lit only now
+  assert.equal(s.f.state(s.n).openedAt, T0);
+  await s.close();
+});
+
+test('rejecting is never locked: a reviewer can say no before CI has finished', async () => {
+  const sha = 'e'.repeat(40);
+  const s = await scenario({ policy: fuse1m, pr: { sha } });
+  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'in_progress' }] });
+  await s.engine.onReview(s.n, { user: { login: 'alice', type: 'User' }, author_association: 'MEMBER', state: 'CHANGES_REQUESTED', body: 'wrong approach' });
+  assert.equal(s.f.db.pulls.get(s.n).state, 'closed');
+  await s.close();
+});
+
+test('right after a push "no checks yet" means CI has not started, not that there is none', async () => {
+  const s = await scenario({ policy: fuse1m, ciGraceMs: 30_000 });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.match(s.f.lastBotText(s.n), /CI has not started yet/);
+  s.clock.t = T0 + 31_000;
+  const r = await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.ok(r.waitFor); // a repo with no CI at all is reviewable once the grace window passes
+  await s.close();
+});
+
+test('while CI re-runs after the fuse was lit, the merge is held (said once) and lands when it passes', async () => {
+  const sha = 'f'.repeat(40);
+  const s = await scenario({ policy: fuse1m, pr: { sha } });
+  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'completed', conclusion: 'success' }] });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  s.f.setChecks(sha, { runs: [{ name: 'build', status: 'in_progress' }, { name: 'snapgit-wait', status: 'in_progress' }] });
   s.clock.t = T0 + 60_000;
   assert.equal(await s.engine.settleOne(s.n), 'held');
   assert.equal(await s.engine.settleOne(s.n), 'held');
@@ -226,13 +288,15 @@ test('protected paths: held until a reviewer approves; unapproved at expiry they
 test('new commits put the fuse out: a reviewer has to look again', async () => {
   const s = await scenario({ policy: fuse1m });
   await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.ok(s.f.state(s.n).ciPassedAt);
   s.clock.t = T0 + 30_000;
   s.pr.head.sha = 'c'.repeat(40);
   await s.engine.onPullRequest(s.pr, 'synchronize');
   const st = s.f.state(s.n);
   assert.equal(st.openedAt, undefined);
+  assert.equal(st.ciPassedAt, undefined); // validated again before anyone can look
   assert.equal(st.headSha, 'c'.repeat(40));
-  assert.match(s.f.lastBotText(s.n), /New commits arrived/);
+  assert.match(s.f.lastBotText(s.n), /New commits arrived.*CI has to pass again/);
   s.clock.t = T0 + 90_000;
   assert.equal(await s.engine.settleOne(s.n), 'pending'); // not due: nobody re-opened it
   await s.close();
@@ -328,6 +392,96 @@ test('timer sweep deletes expired published branches, but never live PRs, the de
   await s.close();
 });
 
+test('the default and base branches are never deleted, whatever a PR\'s head is called; other branches are buried first', async () => {
+  const s = await scenario({ policy: fuse1m, pr: { head: 'develop' } }); // a gitflow PR: develop -> main
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  s.clock.t = T0 + 60_000;
+  assert.equal(await s.engine.settleOne(s.n), 'done');
+  assert.equal(s.f.db.merges.length, 1);
+  assert.ok(s.f.db.branches.has('develop'), 'develop survives its own merge');
+  assert.ok(s.f.db.branches.has('main'));
+  await s.close();
+
+  const t = await scenario({ policy: fuse1m, pr: { head: 'feature/x' } });
+  await t.engine.onComment(t.n, t.f.comment(t.n, 'alice', '/snapgit open'));
+  t.clock.t = T0 + 60_000;
+  await t.engine.settleOne(t.n);
+  assert.ok(!t.f.db.branches.has('feature/x'));
+  assert.ok([...t.f.db.refs.keys()].some((k) => k.startsWith(`snapgit/graveyard/${T0 + 60_000}-feature/x`)), 'the tip was kept');
+  await t.close();
+});
+
+test('the merge is bound to the reviewed commit: a branch that moved without an event resets the fuse', async () => {
+  const s = await scenario({ policy: fuse1m });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  s.pr.head.sha = '9'.repeat(40); // a push whose event we never saw
+  s.clock.t = T0 + 60_000;
+  assert.equal(await s.engine.settleOne(s.n), 'pending');
+  assert.equal(s.f.db.merges.length, 0);
+  assert.equal(s.f.state(s.n).openedAt, undefined);
+  assert.equal(s.f.state(s.n).headSha, '9'.repeat(40));
+  assert.match(s.f.lastBotText(s.n), /branch moved after review/);
+  await s.close();
+
+  const ok = await scenario({ policy: fuse1m });
+  await ok.engine.onComment(ok.n, ok.f.comment(ok.n, 'alice', '/snapgit open'));
+  ok.clock.t = T0 + 60_000;
+  await ok.engine.settleOne(ok.n);
+  assert.equal(ok.f.db.merges[0].sha, ok.pr.head.sha); // and GitHub itself is told to refuse if it moves mid-merge
+  await ok.close();
+});
+
+test('with no reviewers configured only repository members can act: a sock-puppet account cannot play reviewer', async () => {
+  const s = await scenario({ policy: fuse1m });
+  const r1 = await s.engine.onComment(s.n, s.f.comment(s.n, 'sockpuppet', '/snapgit open', 'NONE'));
+  assert.equal(r1.waitFor, undefined);
+  assert.match(s.f.lastBotText(s.n), /only repository members can do that/);
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'drive-by', '/snapgit reject', 'FIRST_TIME_CONTRIBUTOR'));
+  assert.equal(s.f.db.pulls.get(s.n).state, 'open');
+  const r2 = await s.engine.onComment(s.n, s.f.comment(s.n, 'colleague', '/snapgit open', 'COLLABORATOR'));
+  assert.ok(r2.waitFor);
+  await s.close();
+});
+
+test('an approval does not survive new commits, and requireChecks refuses "no checks" as validation', async () => {
+  const policy = { protectedPaths: ['auth/**'], reviewers: ['@alice'], ...fuse1m };
+  const s = await scenario({ policy, pr: { files: [{ filename: 'auth/x.js', additions: 3, deletions: 0 }] } });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit approve')); // approved before opening
+  assert.equal(s.f.state(s.n).approvedBy, 'alice');
+  s.pr.head.sha = '7'.repeat(40);
+  await s.engine.onPullRequest(s.pr, 'synchronize');
+  assert.equal(s.f.state(s.n).approvedBy, undefined);
+  await s.close();
+
+  const r = await scenario({ policy: { requireChecks: true, ...fuse1m } });
+  const out = await r.engine.onComment(r.n, r.f.comment(r.n, 'alice', '/snapgit open'));
+  assert.equal(out.waitFor, undefined);
+  assert.match(r.f.lastBotText(r.n), /requires CI checks and none have run/);
+  r.f.setChecks(r.pr.head.sha, { runs: [{ name: 'build', status: 'completed', conclusion: 'success' }] });
+  assert.ok((await r.engine.onComment(r.n, r.f.comment(r.n, 'alice', '/snapgit open'))).waitFor);
+  await r.close();
+});
+
+test('too close to the deadline there is no review: the fuse would be cut short', async () => {
+  const s = await scenario({ policy: { ttlHours: 1, ...fuse1m } });
+  s.clock.t = T0 + 3600_000 - 30_000;
+  const r = await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  assert.equal(r.waitFor, undefined);
+  assert.match(s.f.lastBotText(s.n), /too late to review: 30s of lifetime left, but the fuse needs 1m/);
+  await s.close();
+});
+
+test('a frozen repository deletes no expired branches either', async () => {
+  const s = await scenario({ policy: { frozen: true } });
+  s.f.addTimer('old', T0 - 1);
+  assert.deepEqual(await s.engine.sweepTimers(), []);
+  assert.ok(s.f.db.branches.has('old'));
+  s.f.setPolicy({ frozen: false });
+  assert.deepEqual((await s.engine.sweepTimers()).map((d) => d.branch), ['old']);
+  assert.ok([...s.f.db.refs.keys()].some((k) => k.startsWith('snapgit/graveyard/')));
+  await s.close();
+});
+
 test('settleAll settles every snapgit PR and ignores the rest', async () => {
   const s = await scenario({ policy: fuse1m });
   const plain = s.f.addPull({ head: 'untracked' }); // opened before the action existed: no state comment
@@ -360,6 +514,10 @@ test('client: pagination, 404s, errors with status, branch names with slashes, c
   const bad = await gh.checkStatus('s2');
   assert.equal(bad.state, 'failure');
   assert.equal(bad.failing[0].name, 'a');
+  // more than one page of check runs: a failure on page two is still found
+  const many = Array.from({ length: 150 }, (_, i) => ({ name: `job${i}`, status: 'completed', conclusion: i === 149 ? 'failure' : 'success' }));
+  f.setChecks('big', { runs: many });
+  assert.equal((await gh.checkStatus('big')).failing[0].name, 'job149');
   f.setChecks('s3', { statuses: [{ context: 'ci/x', state: 'pending' }] });
   assert.equal((await gh.checkStatus('s3')).state, 'pending');
   assert.equal((await gh.checkStatus('nothing')).state, 'none');
@@ -375,7 +533,7 @@ function runEnv(f, event, payload, extra = {}) {
   const outputPath = join(dir, 'output.txt');
   writeFileSync(eventPath, JSON.stringify(payload));
   writeFileSync(outputPath, '');
-  return { env: { GITHUB_REPOSITORY: f.repo, GITHUB_API_URL: f.url, GITHUB_EVENT_NAME: event, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, INPUT_TOKEN: 't', ...extra }, outputPath };
+  return { env: { GITHUB_REPOSITORY: f.repo, GITHUB_API_URL: f.url, GITHUB_EVENT_NAME: event, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, INPUT_TOKEN: 't', 'INPUT_CI-GRACE-SECONDS': '0', 'INPUT_MAX-WAIT': '30', ...extra }, outputPath };
 }
 
 test('action: events drive the engine, a fuse is handed to the wait job, and the wait job merges when it burns out', async () => {
@@ -404,6 +562,21 @@ test('action: events drive the engine, a fuse is handed to the wait job, and the
   await f.close();
 });
 
+test('action: a finished CI run (check_suite) shames or unlocks its PR immediately', async () => {
+  const f = await createFakeGitHub();
+  const quiet = { out: () => {} };
+  const sha = '1'.repeat(40);
+  const pr = f.addPull({ head: 'ci-red', sha });
+  const env = { INPUT_CI_GRACE_SECONDS: '0', 'INPUT_CI-GRACE-SECONDS': '0' };
+  await runAction({ ...runEnv(f, 'pull_request', { action: 'opened', pull_request: pr }).env, ...env }, quiet);
+  f.setChecks(sha, { runs: [{ name: 'tests', status: 'completed', conclusion: 'failure', output: { summary: 'boom' } }] });
+  await runAction({ ...runEnv(f, 'check_suite', { action: 'completed', check_suite: { head_sha: sha } }).env, ...env }, quiet);
+  assert.equal(f.db.pulls.get(pr.number).state, 'closed');
+  assert.ok(!f.db.branches.has('ci-red'));
+  assert.ok(f.db.labels.get(pr.number).has('snapgit:shamed'));
+  await f.close();
+});
+
 test('action: scheduled runs settle everything and sweep expired timers; reviews and non-PR comments are routed', async () => {
   const f = await createFakeGitHub();
   f.setPolicy({ fuse: { baseSec: 1, secPerLine: 0, minSec: 1, maxSec: 1 }, ttlHours: 1 });
@@ -412,7 +585,7 @@ test('action: scheduled runs settle everything and sweep expired timers; reviews
   await runAction(runEnv(f, 'pull_request', { action: 'opened', pull_request: pr }).env, quiet);
   f.addTimer('stale', Date.now() - 1000);
 
-  const review = runEnv(f, 'pull_request_review', { action: 'submitted', pull_request: pr, review: { user: { login: 'carol', type: 'User' }, state: 'approved', body: '' } });
+  const review = runEnv(f, 'pull_request_review', { action: 'submitted', pull_request: pr, review: { user: { login: 'carol', type: 'User' }, author_association: 'MEMBER', state: 'approved', body: '' } });
   const res = await runAction(review.env, quiet);
   assert.equal(res.waitFor.number, pr.number);
 
@@ -423,7 +596,7 @@ test('action: scheduled runs settle everything and sweep expired timers; reviews
   assert.match(lines.join('\n'), /settled 1 PR\(s\); deleted 1 expired branch/);
 
   // A comment on a plain issue (not a PR) is ignored.
-  const issueEvent = runEnv(f, 'issue_comment', { action: 'created', issue: { number: 99 }, comment: { body: '/snapgit open', user: { login: 'alice', type: 'User' } } });
+  const issueEvent = runEnv(f, 'issue_comment', { action: 'created', issue: { number: 99 }, comment: { body: '/snapgit open', user: { login: 'alice', type: 'User' }, author_association: 'MEMBER' } });
   assert.equal((await runAction(issueEvent.env, quiet)).waitFor, null);
   await f.close();
 });

@@ -421,3 +421,171 @@ test('snapgit --version and help', () => {
   for (const word of ['undo', 'freeze', 'resurrect', 'approve', 'policy', 'push']) assert.match(help, new RegExp(word));
   assert.doesNotMatch(help, /snapgit (extend|keep) /);
 });
+
+// ---------------------------------------------------------------- findings from the adversarial review
+
+const forgeRef = (clone, ref, obj) => {
+  const r = sh(clone, 'sh', ['-c', `printf '%s' '${JSON.stringify(obj)}' | git hash-object -w --stdin`]);
+  git(clone, 'push', '-q', '--force', 'origin', `${r.stdout.trim()}:${ref}`);
+};
+
+test('the merge is of what was reviewed: commits pushed after opening void the opening and refresh the PR', () => {
+  const dir = featureRepo();
+  const id = sendId(dir);
+  openIt(dir, id);
+  commit(dir, 'extra.txt', 'sneaked in after review\n', 'one more thing');
+  git(dir, 'switch', '-q', 'main');
+  const swept = snap(dir, ['sweep'], FUSE_DONE);
+  assert.match(swept.stdout, /new commits landed on feat, so the fuse went out/);
+  assert.ok(!mainHas(dir, 'f.txt') && !mainHas(dir, 'extra.txt'));
+  assert.match(snap(dir, ['pr', 'ls'], FUSE_DONE).stdout, /unopened/);
+  const reopened = openIt(dir, id, FUSE_DONE + 1000); // the reviewer now sees the new code
+  assert.match(reopened.stdout, /\+sneaked in after review/);
+  snap(dir, ['sweep'], FUSE_DONE + 62_000);
+  assert.ok(mainHas(dir, 'f.txt') && mainHas(dir, 'extra.txt'));
+});
+
+test('a protected path added after opening is caught at settle time, not trusted from the record', () => {
+  const dir = featureRepo();
+  writePolicy(dir, { protectedPaths: ['auth/**'] });
+  const id = sendId(dir);
+  openIt(dir, id);
+  sh(dir, 'mkdir', ['-p', join(dir, 'auth')]);
+  commit(dir, 'auth/backdoor.js', 'evil\n', 'add backdoor');
+  git(dir, 'switch', '-q', 'main');
+  snap(dir, ['sweep'], FUSE_DONE); // refresh: the record is recomputed and now protected
+  openIt(dir, id, FUSE_DONE + 1000);
+  const held = snap(dir, ['sweep'], FUSE_DONE + 62_000);
+  assert.match(held.stdout, /is held: touches protected paths \(auth\/backdoor.js\)/);
+  assert.ok(!mainHas(dir, 'auth/backdoor.js'));
+});
+
+test('only the sender can withdraw a PR, and a PR deleted from the remote is never merged', () => {
+  const { bare, sender, clone } = remotes({ setup: (s) => writePolicy(s, { reviewers: ['alice@example.com'] }) });
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  const alice = clone('Alice');
+  const eve = clone('Eve');
+  openIt(alice, id);
+  snap(sender, ['sweep', '-r', 'origin'], T0 + 5000); // the sender's watcher sees the opening
+  assert.equal(snap(alice, ['pr', 'reject', id, '-r', 'origin']).status, 0);
+
+  const burn = snap(eve, ['pr', 'burn', id, '-r', 'origin']);
+  assert.notEqual(burn.status, 0);
+  assert.match(burn.stderr, /only the sender .* can withdraw/);
+  assert.match(git(bare, 'ls-remote', '.', 'refs/snapgit/pr/*'), new RegExp(id));
+  assert.match(snap(sender, ['sweep', '-r', 'origin'], FUSE_DONE).stdout, /rejected by Alice/);
+  assert.ok(!mainHas(sender, 'f.txt'));
+
+  // And if the PR is deleted from the remote behind the sender's back, nothing merges.
+  const second = featureRepo();
+  const r2 = remotes({ sender: second });
+  const id2 = snap(r2.sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  openIt(r2.sender, id2);
+  git(r2.bare, 'update-ref', '-d', `refs/snapgit/pr/${id2}`);
+  const gone = snap(r2.sender, ['sweep', '-r', 'origin'], FUSE_DONE);
+  assert.match(gone.stdout, /is gone from its remote \(withdrawn or deleted\), so nothing will merge/);
+  assert.ok(!mainHas(r2.sender, 'f.txt'));
+});
+
+test('a non-reviewer cannot squat the reject ref: their veto is refused, a forged one is replaced by the real one', () => {
+  const { sender, clone } = remotes({ setup: (s) => writePolicy(s, { reviewers: ['alice@example.com'] }) });
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  const alice = clone('Alice');
+  const eve = clone('Eve');
+  openIt(alice, id);
+  assert.match(snap(eve, ['pr', 'reject', id, '-r', 'origin']).stderr, /not a reviewer/); // even from a clone without the PR
+  forgeRef(eve, `refs/snapgit/reject/${id}`, { id, rejector: 'Eve <eve@example.com>', rejectedAt: T0, reason: 'squat' });
+  assert.equal(snap(alice, ['pr', 'reject', id, '-r', 'origin', '-m', 'real veto']).status, 0);
+  assert.match(snap(sender, ['sweep', '-r', 'origin'], FUSE_DONE).stdout, /rejected by Alice <alice@example.com>: "real veto"/);
+  assert.ok(!mainHas(sender, 'f.txt'));
+});
+
+test('the sender withdrawing their own PR (reject) counts even when reviewers are restricted', () => {
+  const { sender, clone } = remotes({ setup: (s) => writePolicy(s, { reviewers: ['alice@example.com'] }) });
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  openIt(clone('Alice'), id);
+  assert.equal(snap(sender, ['pr', 'reject', id, '-r', 'origin', '-m', 'changed my mind']).status, 0);
+  assert.match(snap(sender, ['sweep', '-r', 'origin'], FUSE_DONE).stdout, /rejected by Test/);
+  assert.ok(!mainHas(sender, 'f.txt'));
+});
+
+test('an offline sweep (the git hooks) never deletes the branch of a PR that lives on a remote', () => {
+  const { sender, clone } = remotes();
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  openIt(clone('Alice'), id);
+  snap(sender, ['sweep', '--offline'], T0 + 2 * HOUR);
+  assert.ok(branches(sender).includes('feat'));
+  assert.match(snap(sender, ['sweep', '-r', 'origin'], T0 + 2 * HOUR).stdout, /merged into main/);
+  assert.ok(mainHas(sender, 'f.txt'));
+});
+
+test('a freeze published to a PR\'s remote stops the sender even when they sweep without -r', () => {
+  const { sender, clone } = remotes();
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  openIt(clone('Alice'), id);
+  snap(clone('Ops'), ['freeze', '-r', 'origin', 'incident']);
+  const held = snap(sender, ['sweep'], FUSE_DONE);
+  assert.doesNotMatch(held.stdout, /merged into/);
+  assert.ok(!mainHas(sender, 'f.txt'));
+  const ops = clone('Ops2');
+  snap(ops, ['thaw', '-r', 'origin']);
+  assert.match(snap(sender, ['sweep'], FUSE_DONE + 1000).stdout, /merged into main/);
+});
+
+test('deleting a branch on the remote keeps its remote tip in the graveyard (teammates\' unpulled commits)', () => {
+  const { bare, sender, clone } = remotes();
+  snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']);
+  const mate = clone('Mate');
+  git(mate, 'switch', '-q', 'feat');
+  commit(mate, 'mate.txt', 'teammate work\n', 'mate pushes to feat');
+  git(mate, 'push', '-q', 'origin', 'feat');
+  const mateSha = git(mate, 'rev-parse', 'HEAD');
+  snap(sender, ['sweep', '-r', 'origin'], T0 + 2 * HOUR);
+  assert.equal(git(bare, 'ls-remote', '.', 'refs/heads/feat'), '');
+  assert.match(git(sender, 'for-each-ref', 'refs/snapgit/graveyard'), new RegExp(mateSha));
+});
+
+test('opening too close to the deadline is refused: a fuse cut short by the timer would be a rubber stamp', () => {
+  const dir = featureRepo();
+  const id = sendId(dir); // 1h of life, 1m fuse
+  const late = snap(dir, ['pr', 'open', id, '--screenshot'], T0 + 3600_000 - 30_000);
+  assert.notEqual(late.status, 0);
+  assert.match(late.stderr, /30s of life left but needs a 1m fuse/);
+  git(dir, 'switch', '-q', 'main');
+  snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.ok(!mainHas(dir, 'f.txt'));
+});
+
+test('identity: a self-asserted user.name proves nothing; the GitHub login is how the CLI matches @logins', () => {
+  const { sender, clone } = remotes({ setup: (s) => writePolicy(s, { reviewers: ['@alice'] }) });
+  const id = snap(sender, ['pr', 'send', 'feat', '-r', 'origin', '--ttl', '1h']).stdout.match(/id ([0-9a-f]{8})/)[1];
+  const fake = clone('alice'); // user.name is "alice" but the email is not alice's
+  assert.match(snap(fake, ['pr', 'open', id, '--screenshot']).stderr, /not a reviewer/);
+  git(fake, 'config', 'snapgit.githubLogin', 'alice');
+  assert.equal(snap(fake, ['pr', 'open', id, '--screenshot']).status, 0);
+  // Changing user.name does not let the sender review their own PR.
+  git(sender, 'config', 'user.name', 'Somebody Else');
+  assert.match(snap(sender, ['pr', 'open', id, '-r', 'origin', '--screenshot']).stderr, /not a reviewer|cannot review your own/);
+});
+
+test('a PR that was only ever local can be opened even though origin has never heard of it', () => {
+  const dir = featureRepo();
+  const bare = mkdtempSync(join(tmpdir(), 'snapgit-bare-'));
+  git(bare, 'init', '-q', '--bare', '-b', 'main');
+  git(dir, 'remote', 'add', 'origin', bare);
+  const id = sendId(dir); // no -r: local only
+  const r = openIt(dir, id);
+  assert.match(r.stdout, /validated before review/);
+  assert.equal(git(dir, 'for-each-ref', 'refs/snapgit/pr').length > 0, true);
+});
+
+test('a garbled snapgit ref cannot abort a sweep', () => {
+  const dir = featureRepo();
+  sendId(dir);
+  const junk = sh(dir, 'sh', ['-c', "printf 'not json' | git hash-object -w --stdin"]).stdout.trim();
+  git(dir, 'update-ref', 'refs/snapgit/pr/deadbeef', junk);
+  git(dir, 'switch', '-q', 'main');
+  const r = snap(dir, ['sweep'], T0 + 2 * HOUR);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /nobody ever opened it/);
+});

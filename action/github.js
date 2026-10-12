@@ -58,9 +58,16 @@ export class GitHub {
   updateComment(id, body) { return this.#req('PATCH', `/issues/comments/${id}`, { body }); }
   closePull(n) { return this.#req('PATCH', `/pulls/${n}`, { state: 'closed' }); }
   addLabel(n, label) { return this.#req('POST', `/issues/${n}/labels`, { labels: [label] }); }
-  mergePull(n, { method = 'merge', title } = {}) {
-    return this.#req('PUT', `/pulls/${n}/merge`, { merge_method: method, ...(title ? { commit_title: title } : {}) });
+  /** `sha` makes GitHub itself refuse the merge if the head moved since it was reviewed. */
+  mergePull(n, { method = 'merge', title, sha } = {}) {
+    return this.#req('PUT', `/pulls/${n}/merge`, { merge_method: method, ...(title ? { commit_title: title } : {}), ...(sha ? { sha } : {}) });
   }
+
+  /** Tip of a branch, or null. */
+  async branchSha(name) {
+    try { return (await this.#req('GET', `/git/ref/heads/${seg(name)}`)).object.sha; } catch (e) { if (e.status === 404) return null; throw e; }
+  }
+  createRef(ref, sha) { return this.#req('POST', '/git/refs', { ref: `refs/${ref}`, sha }); }
 
   /** File contents at a ref, or null if it does not exist. */
   async getFile(path, ref) {
@@ -91,8 +98,19 @@ export class GitHub {
    * Returns { state: 'success' | 'failure' | 'pending' | 'none', failing: [{ name, output }] }.
    */
   async checkStatus(sha, ignore = []) {
-    const runs = (await this.#req('GET', `/commits/${sha}/check-runs?per_page=100`))?.check_runs ?? [];
-    const combined = await this.#req('GET', `/commits/${sha}/status`);
+    const runs = [];
+    for (let page = 1; page < 30; page++) {
+      const chunk = (await this.#req('GET', `/commits/${sha}/check-runs?per_page=100&page=${page}`))?.check_runs ?? [];
+      runs.push(...chunk);
+      if (chunk.length < 100) break;
+    }
+    const statuses = [];
+    for (let page = 1; page < 30; page++) {
+      const chunk = (await this.#req('GET', `/commits/${sha}/status?per_page=100&page=${page}`))?.statuses ?? [];
+      statuses.push(...chunk);
+      if (chunk.length < 100) break;
+    }
+    const combined = { statuses };
     const skip = (name) => ignore.some((p) => String(name).toLowerCase().startsWith(p.toLowerCase()));
     const failing = [];
     let pending = false;

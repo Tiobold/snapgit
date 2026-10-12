@@ -2,7 +2,8 @@
 //   - no approve: a reviewer lights the fuse (/snapgit open, or any submitted review) and the PR merges when it
 //     burns out, unless it is rejected (/snapgit reject, or a "changes requested" review);
 //   - a PR nobody ever opens is closed and its branch deleted when its lifetime (ttlHours) is up;
-//   - CI (GitHub's own checks) must pass: if it fails, the authors are shamed and the branch self-destructs;
+//   - review is locked until validation (GitHub's own checks) has passed: no fuse before CI is green. If CI fails,
+//     the authors are shamed and the branch self-destructs straight away, before anyone has to look;
 //   - protectedPaths need a reviewer's /snapgit approve; reviewers/CODEOWNERS limit who can act; frozen halts all.
 // All state lives in one bot comment on the PR, so there is nothing to host.
 import { parsePolicy, DEFAULT_POLICY } from '../src/policy.js';
@@ -18,7 +19,7 @@ const identOf = (login) => `${login} <${login}@users.noreply.github.com>`;
 const iso = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
 const SAFE_BRANCHES = ['main', 'master', 'trunk', 'develop'];
 
-export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], log = () => {} }) {
+export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], ciGraceMs = 30_000, log = () => {} }) {
   const defaults = () => ({ ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [] });
 
   async function policyFor(base) {
@@ -53,18 +54,15 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
 
   function statusText(s, pr) {
     const sized = `${s.lines} changed line${s.lines === 1 ? '' : 's'}${s.ignoredLines ? ` (${s.ignoredLines} more in ignored files)` : ''} = a ${formatDuration(s.fuseMs)} fuse`;
+    const prot = s.protected && !s.approvedBy ? ` ✋ It touches protected paths (${s.protectedFiles.slice(0, 3).join(', ')}), so a reviewer must also \`/snapgit approve\`.` : '';
     let line;
     if (s.merged) line = `🔀 Merged${s.merged.sha ? ` as \`${s.merged.sha.slice(0, 7)}\`` : ''}. Undo with \`/snapgit undo\`.`;
     else if (s.rejected) line = `🚫 Rejected by @${s.rejected.by}${s.rejected.reason ? `: ${s.rejected.reason}` : ''}. Nothing merged.`;
     else if (s.expired) line = `💨 ${s.expired}`;
     else if (s.shamed) line = '😬 Failed CI. The branch self-destructed.';
-    else if (s.openedAt) {
-      line = `🔥 Fuse lit by @${s.openedBy}. It merges ${iso(s.openedAt + s.fuseMs)} unless rejected (\`/snapgit reject\` or request changes).`;
-      if (s.protected && !s.approvedBy) line += ` ✋ It touches protected paths, so a reviewer must also \`/snapgit approve\`.`;
-    } else {
-      line = `⏳ Waiting for a reviewer. Say \`/snapgit open\` (or submit a review) to light the ${formatDuration(s.fuseMs)} fuse. Nobody opens it by ${iso(s.expiresAt)}? It is deleted.`;
-      if (s.protected) line += ` ✋ It touches protected paths (${s.protectedFiles.slice(0, 3).join(', ')}), so a reviewer must also \`/snapgit approve\`.`;
-    }
+    else if (s.openedAt) line = `🔥 Fuse lit by @${s.openedBy}. It merges ${iso(s.openedAt + s.fuseMs)} unless rejected (\`/snapgit reject\` or request changes).${prot}`;
+    else if (!s.ciPassedAt) line = `🧪 Waiting for CI. Reviewing is locked until validation passes (no fuse before then); I'll say here when it is ready. Never opened by ${iso(s.expiresAt)}? It is deleted.${prot}`;
+    else line = `✅ CI passed. ⏳ Waiting for a reviewer. Say \`/snapgit open\` (or submit a review) to light the ${formatDuration(s.fuseMs)} fuse. Nobody opens it by ${iso(s.expiresAt)}? It is deleted.${prot}`;
     return `**snapgit** 👻 ${sized}\n\n${line}`;
   }
 
@@ -107,43 +105,92 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
       const loaded = await load(pr.number);
       if (!loaded) return {};
       const policy = await policyFor(pr.base.ref);
-      const s = { ...loaded.state, headSha: pr.head.sha, ...(await sizeUp(pr, policy)) };
+      const s = { ...loaded.state, headSha: pr.head.sha, headSeenAt: now(), ...(await sizeUp(pr, policy)) };
+      delete s.ciPassedAt; // new commits need validating again
+      delete s.approvedBy; // and an approval was for the old code
       if (s.openedAt) {
-        delete s.openedAt; delete s.openedBy; delete s.approvedBy;
-        await say(pr.number, '🔄 New commits arrived, so the fuse went out. A reviewer has to look again (`/snapgit open`).');
+        delete s.openedAt; delete s.openedBy;
+        await say(pr.number, '🔄 New commits arrived, so the fuse went out and CI has to pass again before a reviewer can look (`/snapgit open`).');
       }
       await write(pr.number, loaded, s, pr);
     }
     return {};
   }
 
-  /** Who may act on this PR? Returns { ok } or { ok: false, why }. The PR's author never opens or approves their own. */
-  async function authorize(pr, login, { self = false } = {}) {
+  const MEMBERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+  /**
+   * Who may act on this PR? Returns { ok } or { ok: false, why }. The PR's author never opens or approves their own.
+   * With no reviewers configured, only repository members (owner, member, collaborator) count, so a throwaway second
+   * account cannot play reviewer.
+   */
+  async function authorize(pr, login, { self = false, assoc } = {}) {
     const policy = await policyFor(pr.base.ref);
     const reviewers = await reviewersFor(policy, pr.base.ref);
     if (!self && login === pr.user.login) return { ok: false, why: 'you cannot review your own PR' };
-    if (!isReviewer(identOf(login), reviewers)) return { ok: false, why: `only reviewers can do that (reviewers: ${reviewers.join(', ')})` };
+    if (reviewers) {
+      if (!isReviewer(identOf(login), reviewers)) return { ok: false, why: `only reviewers can do that (reviewers: ${reviewers.join(', ')})` };
+    } else if (!MEMBERS.has(assoc)) {
+      return { ok: false, why: 'only repository members can do that (or list reviewers in snapgit.json)' };
+    }
     return { ok: true, policy, reviewers };
   }
 
-  async function doOpen(pr, loaded, login) {
+  /**
+   * Has this PR been validated? 'success' (CI green, or genuinely none), 'pending' (running, or not started yet:
+   * right after a push there is a short grace window before "no checks" is believed) or 'failure'.
+   */
+  async function validation(pr, s, policy) {
+    const ci = await gh.checkStatus(pr.head.sha, ignoreChecks);
+    if (ci.state === 'none' && policy?.requireChecks) return { state: 'pending', ci, why: 'this repo requires CI checks and none have run (a first-time contributor\'s workflows may be waiting for approval)' };
+    if (ci.state === 'none') {
+      const since = s.headSeenAt ?? s.createdAt;
+      return now() - since < ciGraceMs ? { state: 'pending', ci, why: 'CI has not started yet' } : { state: 'success', ci };
+    }
+    return { state: ci.state, ci, why: ci.state === 'pending' ? 'CI is still running' : undefined };
+  }
+
+  /** CI failed: shame the authors, close the PR, delete the branch. */
+  async function shame(pr, loaded, failing) {
+    const n = pr.number;
+    const authors = await authorsOf(n);
+    const message = shameMessage({ id: n.toString(16).padStart(4, '0'), label: `PR #${n}`, title: pr.title, head: pr.head.ref, failure: { name: failing.name, timedOut: false }, authors });
+    const mentions = authors.filter((a) => a.login && !a.agent).map((a) => `@${a.login}`).join(' ');
+    await say(n, `😬 ${message}\n\n${mentions ? `${mentions}: ` : ''}"${failing.name}" failed.${failing.output ? `\n\n> ${String(failing.output).split('\n').slice(0, 8).join('\n> ')}` : ''}`);
+    await write(n, loaded, { ...loaded.state, shamed: { check: failing.name, at: now() } }, pr);
+    await gh.closePull(n);
+    await gh.addLabel(n, LABEL.shamed);
+    await removeBranch(pr);
+  }
+
+  async function doOpen(pr, loaded, login, assoc) {
     const s = loaded.state;
     if (s.merged || s.rejected || s.expired || s.shamed) { await say(pr.number, `@${login} this PR is already settled.`); return {}; }
-    const a = await authorize(pr, login);
+    const a = await authorize(pr, login, { assoc });
     if (!a.ok) { await say(pr.number, `@${login} ${a.why}.`); return {}; }
     if (s.openedAt) { await say(pr.number, `@${login} @${s.openedBy} already lit the fuse. It merges ${iso(s.openedAt + s.fuseMs)} unless rejected.`); return {}; }
     if (now() >= s.expiresAt) { await say(pr.number, `@${login} too late: this PR's lifetime is over.`); return {}; }
-    const next = { ...s, openedAt: now(), openedBy: login };
+    if (s.expiresAt - now() < s.fuseMs) {
+      await say(pr.number, `@${login} too late to review: ${formatDuration(Math.max(0, s.expiresAt - now()))} of lifetime left, but the fuse needs ${formatDuration(s.fuseMs)}. A fuse cut short by the deadline would be a rubber stamp, so this PR will be deleted.`);
+      return {};
+    }
+    const policy = await policyFor(pr.base.ref);
+    const v = await validation(pr, s, policy);
+    if (v.state !== 'success') {
+      await say(pr.number, `@${login} not yet: ${v.state === 'failure' ? `CI is failing ("${v.ci.failing[0].name}")` : v.why}. Reviewing is locked until validation passes, so there is no fuse yet. I will comment here when it is ready.`);
+      return {};
+    }
+    const next = { ...s, ciPassedAt: s.ciPassedAt ?? now(), openedAt: now(), openedBy: login };
     await write(pr.number, loaded, next, pr);
     return { waitFor: { number: pr.number, dueAt: dueOf(next) } };
   }
 
-  async function doReject(pr, loaded, login, reason) {
+  async function doReject(pr, loaded, login, reason, assoc) {
     const s = loaded.state;
     if (s.merged || s.rejected || s.expired || s.shamed) { await say(pr.number, `@${login} this PR is already settled.`); return {}; }
     // Reviewers may reject; the author may always withdraw their own PR.
     if (login !== pr.user.login) {
-      const a = await authorize(pr, login, { self: true });
+      const a = await authorize(pr, login, { self: true, assoc });
       if (!a.ok) { await say(pr.number, `@${login} ${a.why}.`); return {}; }
     }
     if (now() >= dueOf(s)) { await say(pr.number, `@${login} too late: the fuse has burned out and the merge is under way.`); return {}; }
@@ -154,22 +201,22 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     return {};
   }
 
-  async function doApprove(pr, loaded, login) {
+  async function doApprove(pr, loaded, login, assoc) {
     const s = loaded.state;
     if (!s.protected) { await say(pr.number, `@${login} this PR does not touch protected paths: it simply merges unless it is rejected.`); return {}; }
-    const a = await authorize(pr, login);
+    const a = await authorize(pr, login, { assoc });
     if (!a.ok) { await say(pr.number, `@${login} ${a.why}.`); return {}; }
     await write(pr.number, loaded, { ...s, approvedBy: login }, pr);
     return {};
   }
 
-  async function doUndo(pr, loaded, login) {
+  async function doUndo(pr, loaded, login, assoc) {
     const s = loaded.state;
     if (!s.merged) { await say(pr.number, `@${login} snapgit has not merged this PR, so there is nothing to undo.`); return {}; }
     if (s.undone) { await say(pr.number, `@${login} this was already undone (#${s.undone.number}).`); return {}; }
     const policy = await policyFor(pr.base.ref);
     const reviewers = await reviewersFor(policy, pr.base.ref);
-    if (!isReviewer(identOf(login), reviewers)) { await say(pr.number, `@${login} only reviewers can undo (reviewers: ${reviewers.join(', ')}).`); return {}; }
+    if (reviewers ? !isReviewer(identOf(login), reviewers) : !MEMBERS.has(assoc)) { await say(pr.number, `@${login} only reviewers can undo${reviewers ? ` (reviewers: ${reviewers.join(', ')})` : ' (repository members, or list reviewers in snapgit.json)'}.`); return {}; }
     const revert = await gh.revertPull(pr.node_id);
     await write(pr.number, loaded, { ...s, undone: { by: login, at: now(), number: revert.number } }, pr);
     await say(pr.number, `↩️ @${login} undid this: revert PR #${revert.number} (${revert.url}). It goes through snapgit like any other PR.`);
@@ -186,11 +233,12 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     if (!loaded) return {};
     const pr = await gh.getPull(n);
     const login = comment.user.login;
+    const assoc = comment.author_association;
     const cmd = m[1].toLowerCase();
-    if (cmd === 'open') return doOpen(pr, loaded, login);
-    if (cmd === 'reject') return doReject(pr, loaded, login, m[2]);
-    if (cmd === 'approve') return doApprove(pr, loaded, login);
-    return doUndo(pr, loaded, login);
+    if (cmd === 'open') return doOpen(pr, loaded, login, assoc);
+    if (cmd === 'reject') return doReject(pr, loaded, login, m[2], assoc);
+    if (cmd === 'approve') return doApprove(pr, loaded, login, assoc);
+    return doUndo(pr, loaded, login, assoc);
   }
 
   /** A submitted review: "changes requested" rejects, anything else from a reviewer counts as opening the PR. */
@@ -201,13 +249,27 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     const pr = await gh.getPull(n);
     const login = review.user.login;
     const state = String(review.state).toLowerCase();
-    if (state === 'changes_requested') return doReject(pr, loaded, login, review.body ?? '');
-    if (state === 'approved' || state === 'commented') return doOpen(pr, loaded, login);
+    if (state === 'changes_requested') return doReject(pr, loaded, login, review.body ?? '', review.author_association);
+    if (state === 'approved' || state === 'commented') return doOpen(pr, loaded, login, review.author_association);
     return {};
+  }
+
+  let defaultBranch = null;
+  const protectedBranch = async (name, pr) => {
+    defaultBranch ??= (await gh.getRepo()).default_branch;
+    return name === defaultBranch || name === pr.base.ref || SAFE_BRANCHES.includes(name);
+  };
+
+  /** Keep a copy of the tip before deleting a branch: refs/snapgit/graveyard/<ms>-<branch> (resurrect with git). */
+  async function bury(name) {
+    const sha = await gh.branchSha(name);
+    if (sha) await gh.createRef(`snapgit/graveyard/${now()}-${name}`, sha).catch(() => {});
   }
 
   async function removeBranch(pr) {
     if (pr.head.repo?.full_name !== gh.repo) return; // a fork's branch is not ours to delete
+    if (await protectedBranch(pr.head.ref, pr)) return; // never the default or base branch, whatever the PR says
+    await bury(pr.head.ref);
     await gh.deleteRef(`heads/${pr.head.ref}`);
     await gh.deleteRef(`snapgit/timer/${pr.head.ref}`);
   }
@@ -243,6 +305,25 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
       await write(n, loaded, loaded.state, pr);
       return 'pending';
     }
+    if (!s.openedAt && !policy.frozen) {
+      // Validation gate: nothing is reviewable until CI has run. Failing CI is shamed straight away.
+      const v = await validation(pr, s, policy);
+      if (v.state === 'failure') { await shame(pr, loaded, v.ci.failing[0]); return 'done'; }
+      if (v.state === 'success' && !s.ciPassedAt) {
+        loaded.state = { ...s, ciPassedAt: now() };
+        await write(n, loaded, loaded.state, pr);
+        await say(n, `✅ CI passed. This PR is ready for review: a reviewer can say \`/snapgit open\` (or submit a review) to light the ${formatDuration(s.fuseMs)} fuse.`);
+        return due > now() ? 'pending' : settleOne(n);
+      }
+    }
+    if (s.headSha && pr.head.sha !== s.headSha) {
+      // The branch moved and we missed (or raced) the event. What was reviewed is not what would merge.
+      const next = { ...s, headSha: pr.head.sha, headSeenAt: now() };
+      delete next.openedAt; delete next.openedBy; delete next.ciPassedAt; delete next.approvedBy;
+      await say(n, '🔄 The branch moved after review, so the fuse went out and CI has to pass again before a reviewer can look (`/snapgit open`).');
+      await write(n, loaded, { ...next, ...(await sizeUp(pr, policy)) }, pr);
+      return 'pending';
+    }
     if (due > now()) return 'pending';
     if (policy.frozen) return hold(pr, loaded, 'snapgit is frozen (snapgit.json says frozen: true): nothing merges or disappears until it is thawed');
 
@@ -264,20 +345,12 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     const ci = await gh.checkStatus(pr.head.sha, ignoreChecks);
     if (ci.state === 'pending') return hold(pr, loaded, 'CI is still running, so it cannot merge yet');
     if (ci.state === 'failure') {
-      const failing = ci.failing[0];
-      const authors = await authorsOf(n);
-      const message = shameMessage({ id: n.toString(16).padStart(4, '0'), label: `PR #${n}`, title: pr.title, head: pr.head.ref, failure: { name: failing.name, timedOut: false }, authors });
-      const mentions = authors.filter((a) => a.login && !a.agent).map((a) => `@${a.login}`).join(' ');
-      await say(n, `😬 ${message}\n\n${mentions ? `${mentions}: ` : ''}"${failing.name}" failed.${failing.output ? `\n\n> ${String(failing.output).split('\n').slice(0, 8).join('\n> ')}` : ''}`);
-      await write(n, loaded, { ...s, shamed: { check: failing.name, at: now() } }, pr);
-      await gh.closePull(n);
-      await gh.addLabel(n, LABEL.shamed);
-      await removeBranch(pr);
+      await shame(pr, loaded, ci.failing[0]);
       return 'done';
     }
 
     try {
-      const merged = await gh.mergePull(n, { method: policy.mergeMethod, title: `${pr.title} (#${n})` });
+      const merged = await gh.mergePull(n, { method: policy.mergeMethod, title: `${pr.title} (#${n})`, sha: s.headSha });
       const next = { ...s, merged: { sha: merged.sha, at: now() } };
       await write(n, loaded, next, pr);
       await say(n, `🔀 Nobody rejected it, so it merged${ci.state === 'success' ? ' (CI passed)' : ''}. Undo with \`/snapgit undo\`.`);
@@ -309,9 +382,20 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     return results;
   }
 
+  /** A check finished somewhere: re-evaluate the open PRs on that commit (so validation is noticed at once). */
+  async function onChecks(sha) {
+    const results = {};
+    for (const pr of await gh.listOpenPulls()) {
+      if (pr.head.sha !== sha || !(await load(pr.number))) continue;
+      results[pr.number] = await settleOne(pr.number);
+    }
+    return results;
+  }
+
   /** Delete branches whose published timer (refs/snapgit/timer/<branch>) has run out. Live PRs settle their own branches. */
   async function sweepTimers() {
     const repo = await gh.getRepo();
+    try { if ((await policyFor(repo.default_branch)).frozen) return []; } catch { return []; } // frozen, or the policy is unreadable: delete nothing
     const safe = new Set([repo.default_branch, ...SAFE_BRANCHES]);
     const live = new Set((await gh.listOpenPulls()).map((p) => p.head.ref));
     const deleted = [];
@@ -319,6 +403,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
       const timer = await gh.readBlobJson(ref.object.sha);
       if (!timer?.branch || !Number.isFinite(timer.expiresAt)) continue;
       if (timer.expiresAt > now() || safe.has(timer.branch) || live.has(timer.branch)) continue;
+      await bury(timer.branch); // keep the tip: the deleted branch can be recovered from refs/snapgit/graveyard/*
       const existed = await gh.deleteRef(`heads/${timer.branch}`);
       await gh.deleteRef(`snapgit/timer/${timer.branch}`);
       deleted.push({ branch: timer.branch, existed });
@@ -326,5 +411,5 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     return deleted;
   }
 
-  return { ensure, onPullRequest, onComment, onReview, settleOne, settleAll, sweepTimers, load, dueOf };
+  return { ensure, onPullRequest, onComment, onReview, onChecks, settleOne, settleAll, sweepTimers, load, dueOf };
 }

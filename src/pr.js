@@ -9,10 +9,11 @@ import { loadChecks, runChecks } from './checks.js';
 import { loadPolicy } from './policy.js';
 import { fuseFromFiles, gatherFiles } from './fuse.js';
 import { matchesAny } from './glob.js';
-import { ident, isReviewer, resolveReviewers } from './authz.js';
+import { ident, isReviewer, resolveReviewers, sameIdentity } from './authz.js';
 import { authorsOf, shameRecord } from './shame.js';
 import { emit } from './notify.js';
 import { publishTimer } from './timers.js';
+import { frozenReason } from './freeze.js';
 
 const PR = 'refs/snapgit/pr/';
 const RECEIPT = 'refs/snapgit/receipt/';
@@ -29,7 +30,8 @@ const check = (id) => {
 const putBlob = (obj, cwd) => git(['hash-object', '-w', '--stdin'], { cwd, input: JSON.stringify(obj) });
 const readRef = (ref, cwd) => {
   const sha = run(['rev-parse', '--verify', '-q', ref], { cwd });
-  return sha.ok ? { blob: sha.out.trim(), data: JSON.parse(git(['cat-file', 'blob', sha.out.trim()], { cwd })) } : null;
+  if (!sha.ok) return null;
+  try { return { blob: sha.out.trim(), data: JSON.parse(git(['cat-file', 'blob', sha.out.trim()], { cwd })) }; } catch { return null; } // a garbled ref must not abort a sweep
 };
 /** 'present' | 'absent' | 'unreachable' */
 const remoteHas = (remote, ref, cwd) => {
@@ -63,6 +65,26 @@ function reviewersFor(rec, cwd) {
   return { reviewers: resolveReviewers(policy, rec.base, cwd), policy };
 }
 
+/** Everything a PR records about the change itself. Used when sending and when the branch moves under a PR. */
+function describeChange(base, head, cwd, policy) {
+  const files = gatherFiles(base, head, cwd);
+  const sized = fuseFromFiles(files, policy.fuse, fuseOverrides(cwd));
+  const protectedFiles = files.map((f) => f.path).filter((p) => matchesAny(p, policy.protectedPaths));
+  return {
+    headSha: git(['rev-parse', `refs/heads/${head}`], { cwd }),
+    lines: sized.lines,
+    rawLines: sized.rawLines,
+    ignoredLines: sized.ignoredLines,
+    fuseMs: process.env.SNAPGIT_FUSE_MS ? Number(process.env.SNAPGIT_FUSE_MS) : sized.fuseMs,
+    protected: protectedFiles.length > 0,
+    protectedFiles: protectedFiles.slice(0, 10),
+    commits: git(['log', '--format=%h %s', `${base}..${head}`], { cwd }).split('\n').filter(Boolean),
+    stat: git(['diff', '--no-color', '--stat', `${base}...${head}`], { cwd }),
+    patch: git(['diff', '--no-color', '--no-ext-diff', `${base}...${head}`], { cwd }) + '\n',
+    sized,
+  };
+}
+
 /**
  * A PR is a JSON blob under refs/snapgit/pr/<id>. It has exactly one outcome: someone rejects it, or it
  * merges one fuse (sized to the change) after somebody first opens it. If nobody ever opens it, the PR is
@@ -77,9 +99,8 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
   const patch = git(['diff', '--no-color', '--no-ext-diff', `${base}...${head}`], { cwd });
   if (!patch) throw new Error(`${head} has no changes relative to ${base}: nothing to send`);
   const policy = loadPolicy(base, cwd);
-  const files = gatherFiles(base, head, cwd);
-  const sized = fuseFromFiles(files, policy.fuse, fuseOverrides(cwd));
-  const protectedFiles = files.map((f) => f.path).filter((p) => matchesAny(p, policy.protectedPaths));
+  const change = describeChange(base, head, cwd, policy);
+  const { sized, ...fields } = change;
 
   let expiresAt = getExpiry(head, cwd);
   if (expiresAt !== null && ttlMs) throw new Error(`${head} already has a timer, and timers can never be changed`);
@@ -89,7 +110,7 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
   }
   const text = (message || '').split('\n');
   const record = {
-    v: 3,
+    v: 4,
     id: randomBytes(4).toString('hex'),
     title: text[0] || git(['log', '-1', '--format=%s', head], { cwd }),
     message: text.slice(1).join('\n').trim(),
@@ -99,15 +120,7 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
     remote: remote || null,
     createdAt: now(),
     expiresAt,
-    lines: sized.lines,
-    rawLines: sized.rawLines,
-    ignoredLines: sized.ignoredLines,
-    fuseMs: process.env.SNAPGIT_FUSE_MS ? Number(process.env.SNAPGIT_FUSE_MS) : sized.fuseMs,
-    protected: protectedFiles.length > 0,
-    protectedFiles: protectedFiles.slice(0, 10),
-    commits: git(['log', '--format=%h %s', `${base}..${head}`], { cwd }).split('\n').filter(Boolean),
-    stat: git(['diff', '--no-color', '--stat', `${base}...${head}`], { cwd }),
-    patch: patch + '\n',
+    ...fields,
   };
   // Fail fast: run the base branch's CI checks on the would-be merge before anyone is asked to review it.
   const gate = previewChecks(record, { cwd });
@@ -120,6 +133,7 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
     setExpiry(head, now(), cwd); // self-destruct: the next sweep deletes the branch
     return { pr: null, shame, warnings };
   }
+  record.validated = { at: now(), checks: gate.checks }; // review only ever sees PRs that passed validation
   const ref = PR + record.id;
   git(['update-ref', ref, putBlob(record, cwd)], { cwd });
   if (remote) {
@@ -177,14 +191,28 @@ function once(id, tag, value, cwd) {
   return true;
 }
 
-/** Sender withdraws a PR: nothing merges, the branch just expires. */
+/** A PR's record from wherever it lives, without claiming or keeping anything. null if it cannot be read. */
+function recordOf(id, { cwd, via }) {
+  const local = readRef(PR + id, cwd)?.data;
+  if (local || !via) return local ?? null;
+  const scratch = `refs/snapgit-remote/pr/${id}`;
+  if (!run(['fetch', '--quiet', via, `+${PR + id}:${scratch}`], { cwd }).ok) return null;
+  try { return readRef(scratch, cwd)?.data ?? null; } finally { run(['update-ref', '-d', scratch], { cwd }); }
+}
+
+/** Sender withdraws a PR: nothing merges, the branch just expires. Only the sender may. */
 export function burnPr(id, { cwd, remote }) {
   check(id);
-  const rec = readRef(PR + id, cwd)?.data;
-  const via = viaFor(rec, remote, cwd);
-  const existed = !!rec || (via && remoteHas(via, PR + id, cwd) === 'present');
-  if (existed) burn(id, { cwd, via });
-  return !!existed;
+  const local = readRef(PR + id, cwd)?.data;
+  const via = viaFor(local, remote, cwd);
+  const rec = recordOf(id, { cwd, via });
+  if (!rec) {
+    if (via && remoteHas(via, PR + id, cwd) === 'present') throw new Error(`PR ${id} exists on ${via} but could not be read, so snapgit cannot check you are the sender`);
+    return false;
+  }
+  if (!sameIdentity(ident(cwd), rec.author)) throw new Error(`only the sender (${rec.author}) can withdraw PR ${id}`);
+  burn(id, { cwd, via });
+  return true;
 }
 
 /**
@@ -215,7 +243,7 @@ export function openPr(id, { cwd, remote, screenshot = false }) {
   const { reviewers } = reviewersFor(record, cwd);
   if (reviewers) {
     if (!isReviewer(me, reviewers)) throw new Error(`you are not a reviewer here (reviewers: ${reviewers.join(', ')})`);
-    if (me === record.author) throw new Error('you cannot review your own PR');
+    if (sameIdentity(me, record.author)) throw new Error('you cannot review your own PR');
   }
 
   let receipt = readRef(rref, cwd)?.data;
@@ -226,7 +254,11 @@ export function openPr(id, { cwd, remote, screenshot = false }) {
     if (receipt.openedAt + fuseOf(record) <= now()) throw new Error(`PR ${id}: the fuse burned out. It is merging`);
   } else {
     if (record.expiresAt <= now()) throw new Error(`PR ${id} is past its deadline and is about to be deleted. Too late to open it`);
-    receipt = { id, title: record.title, sender: record.author, opener: me, openedAt: now(), screenshot };
+    if (record.expiresAt - now() < fuseOf(record)) {
+      // A fuse cut short by the deadline would be a rubber stamp. Timers can't be extended, so it simply lapses.
+      throw new Error(`PR ${id} has ${formatDuration(record.expiresAt - now())} of life left but needs a ${formatDuration(fuseOf(record))} fuse: too late to review it, so it will be deleted`);
+    }
+    receipt = { id, title: record.title, sender: record.author, opener: me, openedAt: now(), screenshot, headSha: record.headSha ?? null };
     git(['update-ref', rref, putBlob(receipt, cwd)], { cwd });
     if (via && !run(['push', ...(squatted ? ['--force'] : []), via, `${rref}:${rref}`], { cwd }).ok) {
       run(['update-ref', '-d', rref], { cwd });
@@ -260,17 +292,30 @@ function findPr(id, { cwd, remote }) {
 /** Reject a PR. This is the only thing a recipient can do besides nothing. */
 export function rejectPr(id, { cwd, remote, reason = '' }) {
   check(id);
-  const { record, via } = findPr(id, { cwd, remote });
+  const { via } = findPr(id, { cwd, remote });
+  const record = recordOf(id, { cwd, via });
   const me = ident(cwd);
+  let reviewers = null;
   if (record) {
-    const { reviewers } = reviewersFor(record, cwd);
-    // Reviewers may reject; the author may always withdraw their own PR.
-    if (reviewers && me !== record.author && !isReviewer(me, reviewers)) throw new Error(`you are not a reviewer here (reviewers: ${reviewers.join(', ')})`);
+    reviewers = reviewersFor(record, cwd).reviewers;
+    // Reviewers may reject; the sender may always withdraw their own PR.
+    if (reviewers && !sameIdentity(me, record.author) && !isReviewer(me, reviewers)) throw new Error(`you are not a reviewer here (reviewers: ${reviewers.join(', ')})`);
+  } else if (via) {
+    throw new Error(`PR ${id} could not be read from ${via}, so snapgit cannot check you may reject it`);
   }
   const rec = { id, rejector: me, rejectedAt: now(), reason };
   const ref = REJECT + id;
+  const valid = (r) => r && (!reviewers || isReviewer(r.rejector, reviewers) || sameIdentity(r.rejector, record?.author ?? ''));
+  if (via && remoteHas(via, ref, cwd) === 'present') {
+    // The first valid veto stands (its timestamp matters). A squatter's invalid one is simply replaced.
+    const scratch = 'refs/snapgit-remote/reject';
+    run(['fetch', '--quiet', via, `+${ref}:${scratch}`], { cwd });
+    const existing = readRef(scratch, cwd)?.data;
+    run(['update-ref', '-d', scratch], { cwd });
+    if (valid(existing)) throw new Error(`PR ${id} was already rejected`);
+  }
   git(['update-ref', ref, putBlob(rec, cwd)], { cwd });
-  if (via && !run(['push', via, `${ref}:${ref}`], { cwd }).ok) throw new Error(`PR ${id} was already rejected`);
+  if (via && !run(['push', '--force', via, `${ref}:${ref}`], { cwd }).ok) throw new Error(`could not publish the rejection to ${via}`);
   return rec;
 }
 
@@ -291,7 +336,7 @@ export function approvePr(id, { cwd, remote }) {
   if (!record.protected) throw new Error(`PR ${id} does not touch protected paths: it simply merges unless it is rejected`);
   const me = ident(cwd);
   const { reviewers } = reviewersFor(record, cwd);
-  if (reviewers ? !isReviewer(me, reviewers) : me === record.author) {
+  if (reviewers ? !isReviewer(me, reviewers) : sameIdentity(me, record.author)) {
     throw new Error(reviewers ? `you are not a reviewer here (reviewers: ${reviewers.join(', ')})` : 'you cannot approve your own PR');
   }
   const approval = { id, approver: me, approvedAt: now() };
@@ -422,6 +467,20 @@ export function listMerged(cwd) {
   return refs.map((r) => readRef(r, cwd)?.data).filter(Boolean).sort((a, b) => b.mergedAt - a.mergedAt);
 }
 
+/** The branch moved under a PR: re-describe the change, and void the opening and approval that were for other code. */
+function refreshPr(rec, policy, via, cwd) {
+  const { sized, ...fields } = describeChange(rec.base, rec.head, cwd, policy);
+  const next = { ...rec, ...fields };
+  git(['update-ref', PR + rec.id, putBlob(next, cwd)], { cwd });
+  if (via) run(['push', '--force', via, `${PR + rec.id}:${PR + rec.id}`], { cwd });
+  for (const r of [RECEIPT, APPROVE]) {
+    run(['update-ref', '-d', r + rec.id], { cwd });
+    if (via) run(['push', via, '--delete', r + rec.id], { cwd });
+  }
+  run(['config', '--unset', `snapgit.once.k${rec.id}half`], { cwd });
+  return next;
+}
+
 /**
  * Settle every PR that is due. A PR is due when its fuse burns out (opened + its fuse) or when its branch
  * timer does, whichever is first, and:
@@ -437,10 +496,15 @@ export function settlePrs({ cwd, push = false, offline = false }) {
   const events = [];
   const gone = new Set();
   const held = new Map();
+  const frozenAt = new Map(); // remote -> reason | null, so a freeze published to a PR's remote stops us even without -r
   for (const rec of listLocalPrs(cwd)) {
     if (!branchExists(rec.head, cwd)) continue;
     const via = viaFor(rec, undefined, cwd);
-    if (via && offline) continue;
+    if (via && offline) { held.set(rec.head, `its PR lives on ${via}: an online sweep settles it`); continue; }
+    if (via) {
+      if (!frozenAt.has(via)) frozenAt.set(via, frozenReason({ cwd, remote: via }));
+      if (frozenAt.get(via)) { held.set(rec.head, `frozen (${frozenAt.get(via)})`); continue; }
+    }
     const expiry = getExpiry(rec.head, cwd) ?? rec.expiresAt;
     const rref = REJECT + rec.id;
     const cref = RECEIPT + rec.id;
@@ -449,13 +513,33 @@ export function settlePrs({ cwd, push = false, offline = false }) {
 
     let who;
     try { who = reviewersFor(rec, cwd); } catch (e) { held.set(rec.head, e.message); events.push({ action: 'hold', id: rec.id, head: rec.head, reason: e.message }); continue; }
-    const { reviewers } = who;
+    const { reviewers, policy } = who;
 
     if (via) {
+      // The PR must still exist where it was sent. If someone deleted it there, it was withdrawn: never merge a ghost.
+      const alive = remoteHas(via, PR + rec.id, cwd);
+      if (alive === 'unreachable') { if (expiry <= now()) unreachable(); continue; }
+      if (alive === 'absent') {
+        burn(rec.id, { cwd, via: null });
+        events.push({ action: 'withdrawn', id: rec.id, head: rec.head });
+        emit('expired', { id: rec.id, head: rec.head, title: rec.title, text: `🗑️ PR ${rec.id} "${rec.title}" is gone from ${via} (withdrawn or deleted), so nothing will merge` }, cwd);
+        continue;
+      }
       const r = remoteHas(via, cref, cwd);
       if (r === 'unreachable') { if (expiry <= now()) unreachable(); continue; }
       if (r === 'present') run(['fetch', '--quiet', via, `+${cref}:${cref}`], { cwd });
     }
+
+    // The merge is of what was reviewed. If the branch moved after the record was made, refresh the record,
+    // void any opening or approval (they were for other code), and make a reviewer look again.
+    const tip = git(['rev-parse', `refs/heads/${rec.head}`], { cwd });
+    if (rec.headSha && tip !== rec.headSha) {
+      refreshPr(rec, policy, via, cwd);
+      events.push({ action: 'reset', id: rec.id, head: rec.head });
+      emit('held', { id: rec.id, head: rec.head, title: rec.title, text: `🔄 PR ${rec.id} "${rec.title}": new commits landed on ${rec.head}, so the fuse went out and a reviewer has to open it again` }, cwd);
+      continue;
+    }
+
     let receipt = readRef(cref, cwd)?.data ?? null;
     if (receipt && reviewers && !isReviewer(receipt.opener, reviewers)) receipt = null; // squatter: not a real opening
     const due = Math.min(expiry, receipt ? receipt.openedAt + fuseOf(rec) : Infinity);
@@ -471,7 +555,8 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       if (r === 'present') run(['fetch', '--quiet', via, `+${rref}:${rref}`], { cwd });
     }
     let rejection = readRef(rref, cwd)?.data ?? null;
-    if (rejection && reviewers && !isReviewer(rejection.rejector, reviewers)) rejection = null;
+    // A veto counts from a reviewer, or from the sender withdrawing their own PR.
+    if (rejection && reviewers && !isReviewer(rejection.rejector, reviewers) && !sameIdentity(rejection.rejector, rec.author)) rejection = null;
     if (rejection && rejection.rejectedAt <= due) {
       burn(rec.id, { cwd, via });
       events.push({ action: 'rejected', id: rec.id, head: rec.head, by: rejection.rejector, reason: rejection.reason });
@@ -485,10 +570,13 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       continue;
     }
 
-    if (rec.protected) {
+    // Protection is recomputed from the actual diff, not trusted from the record.
+    const protectedNow = gatherFiles(rec.base, rec.head, cwd).map((f) => f.path).filter((path) => matchesAny(path, policy.protectedPaths));
+    if (rec.protected || protectedNow.length) {
       if (via && remoteHas(via, aref, cwd) === 'present') run(['fetch', '--quiet', via, `+${aref}:${aref}`], { cwd });
       const approval = readRef(aref, cwd)?.data;
-      const approved = approval && (reviewers ? isReviewer(approval.approver, reviewers) : approval.approver !== rec.author);
+      const approved = approval && (reviewers ? isReviewer(approval.approver, reviewers) : !sameIdentity(approval.approver, rec.author));
+      const shown = protectedNow.length ? protectedNow : rec.protectedFiles;
       if (!approved && expiry <= now()) {
         // Nobody vouched for a protected change before its branch expired: it dies with the branch.
         burn(rec.id, { cwd, via });
@@ -497,7 +585,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
         continue;
       }
       if (!approved) {
-        const reason = `touches protected paths (${rec.protectedFiles.slice(0, 3).join(', ')}${rec.protectedFiles.length > 3 ? ', ...' : ''}): needs snapgit pr approve ${rec.id} from a reviewer`;
+        const reason = `touches protected paths (${shown.slice(0, 3).join(', ')}${shown.length > 3 ? ', ...' : ''}): needs snapgit pr approve ${rec.id} from a reviewer`;
         held.set(rec.head, reason);
         events.push({ action: 'hold', id: rec.id, head: rec.head, reason });
         if (once(rec.id, 'held', 'protected', cwd)) emit('held', { id: rec.id, head: rec.head, title: rec.title, reason, text: `✋ PR ${rec.id} "${rec.title}" ${reason}` }, cwd);
@@ -526,7 +614,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
     if (result.commit) {
       git(['update-ref', MERGED + rec.id, putBlob({
         id: rec.id, title: rec.title, head: rec.head, base: rec.base, mergeCommit: result.commit, preBase: result.oldBase,
-        headSha: git(['rev-parse', `refs/heads/${rec.head}`], { cwd }), mergedAt: now(), opener: receipt.opener,
+        headSha: tip, mergedAt: now(), opener: receipt.opener,
       }, cwd)], { cwd });
     }
     burn(rec.id, { cwd, via });

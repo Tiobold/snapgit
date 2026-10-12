@@ -89,6 +89,10 @@ function printSweep({ ghosted, skipped, events, remoteGhosted = [] }, quiet, dry
       out(`🧊 frozen (${e.reason}): nothing merges or disappears until snapgit thaw`);
     } else if (e.action === 'merged') {
       out(`🔀 PR ${e.id}: nobody rejected it, so ${e.head} merged into ${e.base}${e.checks ? ` (${e.checks} CI check${e.checks > 1 ? 's' : ''} passed)` : ''}${e.late ? ' (a rejection arrived too late)' : ''}${e.pushed ? ' and was pushed' : ''}. Undo: snapgit undo ${e.id}`);
+    } else if (e.action === 'reset') {
+      out(`🔄 PR ${e.id}: new commits landed on ${e.head}, so the fuse went out. A reviewer has to open it again`);
+    } else if (e.action === 'withdrawn') {
+      out(`🗑️ PR ${e.id}: it is gone from its remote (withdrawn or deleted), so nothing will merge`);
     } else if (e.action === 'expired') {
       out(e.reason ? `💨 PR ${e.id}: it touches protected paths and was never approved, so it was deleted. Nothing merged` : `💨 PR ${e.id}: nobody ever opened it, so it was deleted. Nothing merged`);
     } else if (e.action === 'shamed') {
@@ -297,7 +301,7 @@ const COMMANDS = {
       if (screenshot && !values.screenshot) {
         throw new Error('stdout is not a terminal, which looks suspiciously like a screenshot. Nothing was burned. Pass --screenshot if you insist');
       }
-      const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
+      const remote = values.remote ?? (hasRemote('origin', cwd) && !prForBranchId(positionals[0], cwd) ? 'origin' : undefined); // a local-only PR must not be judged by origin
       const { record, receipt, mergesAt } = openPr(positionals[0], { cwd, remote, screenshot });
       render(record, receipt, mergesAt, screenshot);
       return;
@@ -373,6 +377,7 @@ function render(r, receipt, mergesAt, screenshot) {
   out(paint(35, bar));
   out(`${paint(1, r.title)}   ${paint(2, `#${r.id}`)}`);
   out(`${r.author}  ·  ${r.head} -> ${r.base}  ·  sent ${when(r.createdAt)}`);
+  if (r.validated) out(`✅ validated before review: ${r.validated.checks ? `${r.validated.checks} CI check${r.validated.checks > 1 ? 's' : ''} passed` : 'no CI checks defined'}`);
   if (r.message) out(`\n${r.message}`);
   if (r.commits.length) out(`\n${r.commits.map((c) => '  ' + c).join('\n')}`);
   out(`\n${r.stat}\n`);

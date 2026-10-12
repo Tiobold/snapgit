@@ -31,7 +31,8 @@ async function load(backend, id) {
   }
   show('pr', true);
   $('pr-title').textContent = state.record.title;
-  $('pr-meta').textContent = `${state.record.author} · ${state.record.head} → ${state.record.base} · ${backend.label}`;
+  const v = state.record.validated;
+  $('pr-meta').textContent = `${state.record.author} · ${state.record.head} → ${state.record.base} · ${backend.label}${v ? ` · ✅ validated before review${v.checks ? ` (${v.checks} check${v.checks > 1 ? 's' : ''})` : ''}` : ''}`;
   render();
   state.timer = setInterval(render, 250);
   state.poll = setInterval(() => refresh().then(render).catch(() => {}), 3000);

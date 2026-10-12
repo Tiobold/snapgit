@@ -1,6 +1,7 @@
 import { git, run, protectedBranches } from './git.js';
 import { ident } from './authz.js';
 import { now } from './time.js';
+import { buryRemoteTip } from './graveyard.js';
 
 // Branch timers normally live in your git config, which only your machine can see. Publishing a timer as
 // refs/snapgit/timer/<branch> lets ANY runner (a CI job, a teammate) delete the branch when it expires.
@@ -37,7 +38,10 @@ export function sweepRemoteTimers({ cwd, remote, liveHeads = new Set(), dryRun =
     if (t.expiresAt > now() || safe.has(t.branch) || liveHeads.has(t.branch)) continue;
     const exists = run(['ls-remote', '--exit-code', '--heads', remote, t.branch], { cwd }).ok;
     if (!dryRun) {
-      if (exists) run(['push', remote, '--delete', t.branch], { cwd });
+      if (exists) {
+        buryRemoteTip(remote, t.branch, cwd);
+        run(['push', remote, '--delete', t.branch], { cwd });
+      }
       run(['push', remote, '--delete', REF + t.branch], { cwd });
       run(['update-ref', '-d', REF + t.branch], { cwd });
     }

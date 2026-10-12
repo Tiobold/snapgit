@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { GitHub } from './github.js';
 import { createEngine } from './engine.js';
 
-const EVENTS = new Set(['pull_request', 'pull_request_target', 'pull_request_review', 'issue_comment']);
+const EVENTS = new Set(['pull_request', 'pull_request_target', 'pull_request_review', 'issue_comment', 'check_suite', 'check_run', 'status', 'workflow_run']);
+const CHECK_EVENTS = { check_suite: (p) => p.check_suite?.head_sha, check_run: (p) => p.check_run?.head_sha, status: (p) => p.sha, workflow_run: (p) => p.workflow_run?.head_sha };
 const input = (env, name, dflt = '') => env[`INPUT_${name.toUpperCase()}`] ?? dflt;
 
 export async function runAction(env = process.env, { fetchImpl, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), out = (s) => process.stdout.write(`${s}\n`) } = {}) {
@@ -20,6 +21,7 @@ export async function runAction(env = process.env, { fetchImpl, sleep = (ms) => 
   const engine = createEngine({
     gh, now, log: out,
     ignoreChecks: input(env, 'ignore-checks', 'snapgit').split(',').map((s) => s.trim()).filter(Boolean),
+    ciGraceMs: Number(input(env, 'ci-grace-seconds', '30')) * 1000,
   });
   const mode = input(env, 'mode', 'auto');
   const event = env.GITHUB_EVENT_NAME;
@@ -38,7 +40,10 @@ export async function runAction(env = process.env, { fetchImpl, sleep = (ms) => 
   } else {
     const payload = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
     let r = {};
-    if (event.startsWith('pull_request') && event !== 'pull_request_review') r = await engine.onPullRequest(payload.pull_request, payload.action, payload.label?.name);
+    if (CHECK_EVENTS[event]) {
+      const sha = CHECK_EVENTS[event](payload);
+      if (sha) await engine.onChecks(sha);
+    } else if (event.startsWith('pull_request') && event !== 'pull_request_review') r = await engine.onPullRequest(payload.pull_request, payload.action, payload.label?.name);
     else if (event === 'pull_request_review') {
       if (payload.action === 'submitted') r = await engine.onReview(payload.pull_request.number, payload.review);
     } else if (event === 'issue_comment' && payload.issue?.pull_request && payload.action === 'created') {

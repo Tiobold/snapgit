@@ -18,6 +18,7 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
     merges: [], // calls to the merge endpoint
     reverts: [],
     mergeBehavior: null, // set to { status, message } to make the merge endpoint fail
+    branchShas: new Map(),
     nextComment: 1, nextPr: 1, calls: [],
   };
 
@@ -42,9 +43,9 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
     setFile(ref, path, text) { db.contents.set(`${ref}:${path}`, text); },
     setPolicy(policy, ref = defaultBranch) { api.setFile(ref, 'snapgit.json', typeof policy === 'string' ? policy : JSON.stringify(policy)); },
     setChecks(sha, { runs = [], statuses = [] }) { db.checks.set(sha, { runs, statuses }); },
-    /** A human comment. */
-    comment(number, login, body) {
-      const c = { id: db.nextComment++, body, user: { login, type: 'User' } };
+    /** A human comment. author_association defaults to MEMBER, like a teammate. */
+    comment(number, login, body, association = 'MEMBER') {
+      const c = { id: db.nextComment++, body, user: { login, type: 'User' }, author_association: association };
       db.comments.get(number).push(c);
       return c;
     },
@@ -106,6 +107,7 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
         const pr = db.pulls.get(Number(m[1]));
         db.merges.push({ number: pr.number, ...body });
         if (db.mergeBehavior) return send(db.mergeBehavior.status, { message: db.mergeBehavior.message });
+        if (body.sha && body.sha !== pr.head.sha) return send(409, { message: 'Head branch was modified. Review and try the merge again.' });
         pr.merged = true; pr.state = 'closed';
         return send(200, { merged: true, sha: `merge${pr.number}`.padEnd(40, 'f') });
       }
@@ -129,8 +131,8 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
         const text = db.contents.get(`${url.searchParams.get('ref')}:${rest.slice('/contents/'.length)}`);
         return text === undefined ? send(404, { message: 'Not Found' }) : send(200, { encoding: 'base64', content: Buffer.from(text).toString('base64') });
       }
-      if ((m = rest.match(/^\/commits\/([^/]+)\/check-runs$/))) return send(200, { check_runs: db.checks.get(m[1])?.runs ?? [] });
-      if ((m = rest.match(/^\/commits\/([^/]+)\/status$/))) return send(200, { statuses: db.checks.get(m[1])?.statuses ?? [] });
+      if ((m = rest.match(/^\/commits\/([^/]+)\/check-runs$/))) return send(200, { check_runs: page(db.checks.get(m[1])?.runs ?? [], url) });
+      if ((m = rest.match(/^\/commits\/([^/]+)\/status$/))) return send(200, { statuses: page(db.checks.get(m[1])?.statuses ?? [], url) });
       if ((m = rest.match(/^\/git\/matching-refs\/(.+)$/))) {
         return send(200, [...db.refs].filter(([r]) => r.startsWith(m[1])).map(([r, sha]) => ({ ref: `refs/${r}`, object: { sha } })));
       }
@@ -138,7 +140,11 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
         const b = db.blobs.get(m[1]);
         return b === undefined ? send(404, { message: 'Not Found' }) : send(200, { encoding: 'base64', content: Buffer.from(b).toString('base64') });
       }
-      if ((m = rest.match(/^\/git\/ref\/heads\/(.+)$/))) return db.branches.has(m[1]) ? send(200, { ref: `refs/heads/${m[1]}` }) : send(404, { message: 'Not Found' });
+      if ((m = rest.match(/^\/git\/ref\/heads\/(.+)$/))) return db.branches.has(m[1]) ? send(200, { ref: `refs/heads/${m[1]}`, object: { sha: db.branchShas.get(m[1]) ?? 'e'.repeat(40) } }) : send(404, { message: 'Not Found' });
+      if (rest === '/git/refs' && req.method === 'POST') {
+        db.refs.set(body.ref.replace(/^refs\//, ''), body.sha);
+        return send(201, { ref: body.ref });
+      }
       if ((m = rest.match(/^\/git\/refs\/heads\/(.+)$/)) && req.method === 'DELETE') {
         return db.branches.delete(m[1]) ? send(204) : send(422, { message: 'Reference does not exist' });
       }

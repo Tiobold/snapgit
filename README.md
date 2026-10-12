@@ -56,6 +56,18 @@ and the tree is clean. Conflicts, a dirty base, or an unreachable remote **hold*
 `--remote` to also push the result. A rejection only counts if it arrived before the fuse burned out. Piping `pr open`
 (a screenshot, in spirit) is refused unless you pass `--screenshot`, which opens it anyway and records that you did.
 
+**Validated before review.** `pr send` runs the CI checks first, so a PR only exists once validation passed
+(`pr open` shows "validated before review"); nothing is reviewable, and no fuse can start, before that. Failing validation shames
+the authors and destroys the branch before anyone has to look.
+
+**The merge is of what was reviewed.** The PR records the commit it describes. If the branch moves after that, the sweep
+refreshes the record, voids the opening and any approval, and a reviewer has to open it again. Protected paths are recomputed
+from the real diff at merge time. Opening needs at least one full fuse of lifetime left (a fuse cut short by the deadline would
+be a rubber stamp), so a PR opened too late is simply deleted with its branch.
+
+**Withdrawing.** Only the sender can `pr burn` a PR. If a PR disappears from its remote behind the sender's back the sweep
+treats it as withdrawn and merges nothing. A rejection by a reviewer, or by the sender withdrawing their own PR, counts.
+
 **Read receipts**: `pr receipts` lists who opened your PRs, when, and whether they screenshotted.
 
 ## Rules: `snapgit.json` on the base branch
@@ -72,7 +84,7 @@ The file lives on the **base** branch, so a PR can't rewrite its own rules. No f
   },
   "reviewers": ["@alice", "bob@example.com"],
   "protectedPaths": ["auth/**", "infra/**"],
-  "mergeMethod": "squash", "ttlHours": 24, "frozen": false
+  "mergeMethod": "squash", "ttlHours": 24, "frozen": false, "requireChecks": false
 }
 ```
 
@@ -85,6 +97,8 @@ The file lives on the **base** branch, so a PR can't rewrite its own rules. No f
   left by a non-reviewer is ignored when the sender settles (so nobody can squat a PR or forge a veto). Use `"reviewers":
   "CODEOWNERS"` to take the individual owners from the base branch's CODEOWNERS. Set `git config snapgit.githubLogin <you>`
   so the CLI identifies you the way the web UI does.
+- **Identity.** `@alice` matches an identity only through a GitHub noreply address (set `snapgit.githubLogin`), never through
+  a self-asserted `user.name`. "Your own PR" means the same email or login, so renaming yourself doesn't help.
 - **Protected paths.** PRs touching them don't merge by silence: a reviewer must `pr approve`. Unapproved when the branch
   expires, they are deleted. This is the one exception to "no approve".
 
@@ -149,6 +163,13 @@ shell (`cat`, `test -f`) skip on Windows. `SNAPGIT_NOW` (epoch ms) overrides the
 
 `docs/video/snapgit-tiktok.mp4` is the 99 second 1080x1920 pitch, built by `docs/video/build.sh` from `scenes.json` (HTML
 slides, headless Chromium, offline Kokoro narration, ffmpeg). Caption and hashtags: `docs/video/tiktok-caption.txt`.
+
+## Trust model
+
+snapgit's rules stop mistakes, lazy shortcuts and accounts without the right standing. They do **not** stop someone with push
+access to the remote from rewriting `refs/snapgit/*` by hand: git has no per-ref permissions. If that matters, restrict
+those refs with your host's rulesets or branch/ref protection, and keep the reviewers list short. On GitHub the Action
+sidesteps this: its state lives in a bot comment only the Action's token can write.
 
 ## Honest limits
 

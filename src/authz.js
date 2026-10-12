@@ -21,8 +21,15 @@ export function matchesReviewer(ident, entry) {
   const who = parseIdent(ident);
   const e = String(entry).trim().toLowerCase();
   if (e.includes('@') && !e.startsWith('@')) return who.email === e;
-  const login = e.replace(/^@/, '');
-  return who.login === login || (!!who.name && who.name.toLowerCase() === login);
+  // Logins match only through GitHub noreply addresses: a self-asserted user.name proves nothing.
+  return who.login === e.replace(/^@/, '');
+}
+
+/** Are these the same person? Same email, or same GitHub login. (Names are self-asserted and ignored.) */
+export function sameIdentity(a, b) {
+  const x = parseIdent(a);
+  const y = parseIdent(b);
+  return (!!x.email && x.email === y.email) || (!!x.login && x.login === y.login);
 }
 
 /** reviewers === null means anyone may review. Otherwise the identity must match an entry. */
