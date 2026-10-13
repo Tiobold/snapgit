@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { snap, featureRepo, repo, T0, git, sh, BIN } from './helpers.js';
 
@@ -10,7 +10,7 @@ test('skill: prints the bundled skill and it names the real commands', () => {
   const dir = repo();
   const r = snap(dir, ['skill']);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^---\nname: snapgit/);
+  assert.match(r.stdout, /^---\r?\nname: snapgit/);
   const help = snap(dir, ['help']).stdout;
   for (const cmd of r.stdout.match(/snapgit (snap|status|pr send|pr ls|pr burn|pr checks|undo|policy|shame|metrics|graveyard|resurrect)\b/g)) {
     assert.ok(help.includes(cmd.trim()) , `skill mentions "${cmd}" which is not in help`);
@@ -32,10 +32,10 @@ test('init --agent writes the skill and an idempotent AGENTS.md block; --workflo
 
 test('init --agent keeps existing AGENTS.md content', () => {
   const dir = repo();
-  sh(dir, 'sh', ['-c', 'printf "# Mine\\nkeep me\\n" > AGENTS.md']);
+  writeFileSync(join(dir, 'AGENTS.md'), '# Mine\nkeep me\n');
   snap(dir, ['init', '--agent']);
   const text = readFileSync(join(dir, 'AGENTS.md'), 'utf8');
-  assert.match(text, /^# Mine\nkeep me\n/);
+  assert.match(text, /^# Mine\r?\nkeep me\r?\n/);
   assert.equal(text.match(/snapgit:begin/g).length, 1);
 });
 
@@ -63,7 +63,7 @@ test('--json: ls, status, pr send, pr ls', () => {
 test('pr send --json reports CI shame as ok:false with exit 1', () => {
   const dir = featureRepo();
   git(dir, 'switch', '-q', 'main');
-  sh(dir, 'sh', ['-c', `printf '%s' '{"checks":[{"name":"tests","run":"echo boom >&2; exit 3"}]}' > snapgit.json`]);
+  writeFileSync(join(dir, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: 'node -e "process.exit(3)"' }] }));
   git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'rules');
   git(dir, 'switch', '-q', 'feat'); git(dir, 'rebase', '-q', 'main');
   const r = snap(dir, ['pr', 'send', '--json']);
