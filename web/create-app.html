@@ -13,7 +13,7 @@
   <header class="hero">
     <p class="badge"><a href="./">👻 snapgit</a></p>
     <h1>Create the GitHub App</h1>
-    <p class="lede">For whoever runs this site. Two clicks register the App that powers "Sign in with GitHub", with only the permissions snapgit needs.</p>
+    <p class="lede">For the person who runs this site, once. It registers <strong>one public GitHub App</strong> that anyone can use to sign in and install on their own repositories, so nobody else needs a token, a Vercel account, or an App of their own.</p>
   </header>
   <main>
     <section class="panel" id="start">
@@ -22,7 +22,7 @@
       <form id="form" method="post" class="stack" autocomplete="off">
         <label>App name <input id="name" value="snapgit" maxlength="34" spellcheck="false"></label>
         <label>Organization <small>(optional: create it under an organization instead of your account)</small> <input id="org" placeholder="my-org" spellcheck="false"></label>
-        <label class="check"><input id="public" type="checkbox"> Let other accounts install it</label>
+        <label class="check"><input id="public" type="checkbox" checked> Public: any account or organization can install it (leave on, this is the point)</label>
         <input type="hidden" name="manifest" id="manifest">
         <div class="row"><button class="btn primary" type="submit">Create the App on GitHub</button></div>
       </form>

@@ -12,7 +12,7 @@ rejected here, and the sender's `snapgit sweep` honors it.
 
 ## Sign in with GitHub
 
-`api/auth/{status,login,callback}.js` (shared code in `api/_auth.js`) implement a GitHub App web flow with no database: `login` sets a random state in an HttpOnly cookie and redirects to GitHub, `callback` checks the state, exchanges the code using `GITHUB_CLIENT_SECRET`, and redirects back with the token in the URL fragment (`#gh_token=`), which `lib/auth.js` moves into the token field and scrubs from the address bar. Return paths are a closed list, so it is not an open redirect. See [setup.html](setup.html#signin-setup) to register the App.
+`api/auth/{status,login,callback}.js` (shared code in `api/_auth.js`) implement a GitHub App web flow with no database: `login` sets a random state in an HttpOnly cookie and redirects to GitHub, `callback` checks the state, exchanges the code using `GITHUB_CLIENT_SECRET`, and redirects back with the token in the URL fragment (`#gh_token=`), which `lib/auth.js` moves into the token field and scrubs from the address bar. Return paths are a closed list, so it is not an open redirect. One public App serves every user of the site; see [setup.html](setup.html#signin).
 
 ## Deploy on Vercel
 

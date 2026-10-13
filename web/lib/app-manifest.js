@@ -1,6 +1,6 @@
 // GitHub App manifest flow: build the manifest, and turn the one-time code GitHub sends back into credentials.
 // https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest
-export function buildManifest({ origin, pagePath, name = 'snapgit', isPublic = false }) {
+export function buildManifest({ origin, pagePath, name = 'snapgit', isPublic = true }) {
   return {
     name,
     url: origin,

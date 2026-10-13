@@ -314,7 +314,7 @@ await test('create-app: manifest is minimal, state is checked, a code becomes cr
   const manifest = JSON.parse(decodeURIComponent(posted.body.split('manifest=')[1].replace(/\+/g, ' ')));
   assert.deepEqual(manifest.default_permissions, { contents: 'write', pull_requests: 'read' });
   assert.equal(manifest.callback_urls[0], `${base}/api/auth/callback`);
-  assert.equal(manifest.public, false); assert.equal(manifest.hook_attributes.active, false);
+  assert.equal(manifest.public, true); assert.equal(manifest.hook_attributes.active, false);
   const state = new URL(posted.url).searchParams.get('state');
   await page.goto(`${base}/create-app?code=goodcode&state=${state}`);
   // a fresh navigation lost the tab state? sessionStorage survives same-tab navigation, so this works

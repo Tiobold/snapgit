@@ -184,10 +184,12 @@ and snapgit has none). Create a fine-grained one at <https://github.com/settings
 repository, **Contents: Read and write** (the dashboard alone needs Contents and Pull requests read-only). It stays in the
 tab's memory and goes only to `api.github.com`. Details, and the classic-token and SSO route: [web/setup.html](web/setup.html).
 
-**Sign in with GitHub (optional).** `web/api/` holds three stateless functions (Vercel runs them as is) for a GitHub App
-sign-in, so people can skip the token. It needs `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from a GitHub App with Contents
-read/write and Pull requests read permissions; tokens are short-lived, only reach repositories the App is installed on,
-and travel in the URL fragment. The button appears only on hosts where it is configured. Steps: [web/setup.html](web/setup.html#signin-setup).
+**Sign in with GitHub (optional, no token to make).** The site's operator registers **one public GitHub App** once
+(`/create-app` does it in two clicks) and puts its client ID and secret in the host's environment. After that anyone can press
+*Sign in with GitHub* and install the App on just the repositories they review in: no token, no Vercel account, no App of their
+own. The App only gets Contents read/write and Pull requests read, tokens expire after about 8 hours, and they reach the page
+in the URL fragment. The server side is three stateless functions in `web/api/`. Copies without them (GitHub Pages, plain static
+hosts) just don't show the button and keep the token field. Details: [web/setup.html](web/setup.html#signin).
 
 **Hosting it yourself on GitHub Pages.** Fork this repository, set Settings, Pages, Source to *GitHub Actions*, then run
 the *Deploy web to GitHub Pages* workflow from the Actions tab. Your copy lives at `https://<you>.github.io/snapgit/`.

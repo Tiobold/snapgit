@@ -18,7 +18,7 @@
 
   <main>
     <section class="panel" id="token">
-      <h2>Getting a GitHub token</h2>
+      <h2>Or: getting a GitHub token</h2>
       <p class="muted">You need one to <strong>open or reject</strong> a PR, and for the metrics dashboard on a private repository. Reading a public repository needs none.</p>
       <ol class="steps">
         <li>Open <a href="https://github.com/settings/personal-access-tokens/new" rel="noreferrer noopener">github.com/settings/personal-access-tokens/new</a> (Settings, Developer settings, Personal access tokens, Fine-grained tokens, Generate new token).</li>
@@ -46,15 +46,25 @@
       <p class="hint">Hosts that cannot send headers (GitHub Pages included) rely on the content security policy each page carries in a meta tag, so the pages still only talk to <code>api.github.com</code>.</p>
     </section>
 
-    <section class="panel" id="signin-setup">
-      <h2>Adding "Sign in with GitHub" (host operators)</h2>
-      <p class="muted">Optional, and the one piece that needs a server: three tiny functions in <code>web/api/</code> (Vercel runs them as is) that swap GitHub's sign-in code for a token, because that swap needs a secret. Nothing is stored. Without it the pages just keep the token field, and the button never appears (GitHub Pages included).</p>
+    <section class="panel" id="signin">
+      <h2>Sign in with GitHub (no token to make)</h2>
+      <p class="muted">When the site you are on shows a <strong>Sign in with GitHub</strong> button, use it instead of a token. There is nothing to register and no Vercel account involved: one public snapgit App, run by the site's operator, is shared by everyone.</p>
       <ol class="steps">
-        <li><strong>Quick way:</strong> open <a href="create-app.html">create-app.html</a> on your site, press the button, confirm on GitHub, and it hands you the client ID and secret for step 2. <strong>By hand:</strong> register a <strong>GitHub App</strong>: Settings, Developer settings, GitHub Apps, New GitHub App. Callback URL <code>https://YOUR-SITE/api/auth/callback</code>. Untick Webhook. Keep <em>Expire user authorization tokens</em> on. Repository permissions: <strong>Contents: Read and write</strong>, <strong>Pull requests: Read-only</strong>.</li>
-        <li>Generate a client secret. In your host's settings add the environment variables <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> (and <code>PUBLIC_URL</code> if you serve it from a custom domain), then redeploy.</li>
-        <li>Each team installs the App on the repositories they review in (the App's page, Install App). Sign-in tokens only reach repositories where the App is installed <em>and</em> the person has access, they expire after 8 hours, and they are handed to the page in the URL fragment, which is never sent to any server and is removed from the address bar at once.</li>
+        <li>Press <strong>Sign in with GitHub</strong> and approve.</li>
+        <li>Install the <strong>snapgit</strong> App on the repositories you review in (GitHub offers it during sign-in, or use the App's page). <em>Only select repositories</em> keeps it narrow. In an organization, an owner may have to approve the install once.</li>
+        <li>That's it. The App can only read and write snapgit's refs and read pull requests on the repositories you picked, your sign-in lasts about 8 hours, and the token only ever lives in your browser tab.</li>
       </ol>
-      <p class="hint">Why an App and not an OAuth app? An OAuth app can only ask for the broad <code>repo</code> scope (every repository you can reach). An App gets just Contents and Pull requests, on the repositories it is installed on.</p>
+      <p class="hint">No button on your copy of the site (GitHub Pages, a plain static host)? Then it has no server piece, so use a token above, or open the shared site instead.</p>
+    </section>
+
+    <section class="panel" id="signin-setup">
+      <h2>Running the sign-in yourself (site operators only)</h2>
+      <p class="muted">Only needed for whoever runs a site with the sign-in button. Three tiny stateless functions in <code>web/api/</code> (Vercel runs them as is) swap GitHub's sign-in code for a token, because that swap needs a secret. Nothing is stored.</p>
+      <ol class="steps">
+        <li>Open <a href="create-app.html">create-app.html</a> on your site, press the button, confirm on GitHub. It registers <strong>one public GitHub App</strong> (Contents read and write, Pull requests read) that every user of your site shares.</li>
+        <li>Put the client ID and secret it shows you into the host's environment variables <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> (and <code>PUBLIC_URL</code> on a custom domain), then redeploy.</li>
+      </ol>
+      <p class="hint">Why an App and not an OAuth app? An OAuth app can only ask for the broad <code>repo</code> scope (every repository you can reach). A public App gets just Contents and Pull requests, on the repositories each person installs it on.</p>
     </section>
 
     <section class="panel" id="no-web">
