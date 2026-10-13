@@ -184,6 +184,11 @@ and snapgit has none). Create a fine-grained one at <https://github.com/settings
 repository, **Contents: Read and write** (the dashboard alone needs Contents and Pull requests read-only). It stays in the
 tab's memory and goes only to `api.github.com`. Details, and the classic-token and SSO route: [web/setup.html](web/setup.html).
 
+**Sign in with GitHub (optional).** `web/api/` holds three stateless functions (Vercel runs them as is) for a GitHub App
+sign-in, so people can skip the token. It needs `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from a GitHub App with Contents
+read/write and Pull requests read permissions; tokens are short-lived, only reach repositories the App is installed on,
+and travel in the URL fragment. The button appears only on hosts where it is configured. Steps: [web/setup.html](web/setup.html#signin-setup).
+
 **Hosting it yourself on GitHub Pages.** Fork this repository, set Settings, Pages, Source to *GitHub Actions*, then run
 the *Deploy web to GitHub Pages* workflow from the Actions tab. Your copy lives at `https://<you>.github.io/snapgit/`.
 Vercel (Root Directory `web`) or any static host works too, and `npx serve web` runs it locally.

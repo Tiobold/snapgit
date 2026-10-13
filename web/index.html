@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>snapgit: GitHub, but disappearing is a feature</title>
   <meta name="description" content="Disappearing branches, pull requests with one button, and merge by neglect. Review snapgit PRs in your browser.">
@@ -30,9 +30,10 @@
       <form id="find" autocomplete="off">
         <label>Repository <input id="repo" name="repo" placeholder="owner/repo" spellcheck="false"></label>
         <label>PR id <input id="pr-id" name="id" placeholder="8 hex characters, e.g. 95962cb1" spellcheck="false" maxlength="8"></label>
-        <label>GitHub token <input id="token" name="token" type="password" placeholder="needed to open or reject (repo scope)" autocomplete="off"></label>
+        <label>GitHub token <input id="token" name="token" type="password" placeholder="needed to open or reject" autocomplete="off"></label>
         <p class="hint"><a href="setup.html#token">How do I get a token?</a> The token stays in this tab's memory and is only ever sent to api.github.com. Opening and rejecting write small refs (<code>refs/snapgit/*</code>) into the repository, exactly like the CLI.</p>
         <div class="row">
+          <a id="signin" class="btn" href="api/auth/login?return=/" hidden>Sign in with GitHub</a>
           <button class="btn primary" type="submit">Find PR</button>
           <button class="btn" type="button" id="demo">Try the demo</button>
         </div>

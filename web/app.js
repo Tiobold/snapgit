@@ -1,4 +1,5 @@
 import { fuseOf, parseRepo, isPrId, mergesAt, clock, parseDiff } from './lib/core.js';
+import { initSignIn } from './lib/auth.js';
 import { GitHubBackend, DemoBackend, demoRecord } from './lib/backends.js';
 
 const $ = (id) => document.getElementById(id);
@@ -145,3 +146,4 @@ $('reject-form').addEventListener('submit', reject);
 const params = new URLSearchParams(location.search);
 if (params.get('repo')) $('repo').value = params.get('repo');
 if (params.get('pr')) $('pr-id').value = params.get('pr');
+initSignIn({ button: $('signin'), tokenInput: $('token'), onError: fail, returnPath: '/' });

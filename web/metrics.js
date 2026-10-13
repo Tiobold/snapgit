@@ -1,5 +1,6 @@
 import { summarize, insights, fmtDuration, pct, filterRecords, demoRecords, aggregatesCsv, recordsCsv, KINDS, DAY } from './lib/metrics.js';
 import { loadFromGitHub } from './lib/metrics-data.js';
+import { initSignIn } from './lib/auth.js';
 import { parseRepo } from './lib/core.js';
 
 const $ = (id) => document.getElementById(id);
@@ -369,3 +370,4 @@ $('csv-rec').addEventListener('click', () => download('snapgit-prs.csv', records
 const params = new URLSearchParams(location.search);
 if (params.get('repo')) $('repo').value = params.get('repo');
 if (params.get('demo') !== null) $('demo').click();
+initSignIn({ button: $('signin'), tokenInput: $('token'), onError: (m) => { $('error').textContent = m; $('error').hidden = false; }, returnPath: '/metrics' });

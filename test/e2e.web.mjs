@@ -67,7 +67,8 @@ const vercelHeaders = Object.fromEntries(JSON.parse(readFileSync('web/vercel.jso
 const server = http.createServer((req, res) => {
   const path = req.url.split('?')[0]; const file = join(ROOT, path === '/' ? 'index.html' : extname(path) ? path : `${path}.html`);
   if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
-  try { res.writeHead(200, { ...vercelHeaders, 'content-type': MIME[extname(file)] || 'application/octet-stream' }).end(readFileSync(file)); } catch { res.writeHead(404).end(); }
+  let body; try { body = readFileSync(file); } catch { res.writeHead(404).end(); return; }
+  res.writeHead(200, { ...vercelHeaders, 'content-type': MIME[extname(file)] || 'application/octet-stream' }).end(body);
 }).listen(0);
 const base = `http://localhost:${server.address().port}`;
 
@@ -280,6 +281,24 @@ await test('setup page: token and hosting guide render, linked from both pages, 
   assert.match(await page.locator('#host').innerText(), /Settings, Pages/);
   await page.goto(`${base}/metrics`);
   assert.equal(await page.locator('a[href="setup.html#token"]').count(), 1);
+  assert.deepEqual(errors, []);
+});
+
+await test('sign in with GitHub: hidden without the server piece; shown when configured; token taken from the fragment and scrubbed', async () => {
+  let { page, errors } = await newPage();
+  await page.goto(base);
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator('#signin').isHidden(), true, 'no button on a static host');
+  ({ page, errors } = await newPage());
+  await page.route('**/api/auth/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"enabled":true}' }));
+  await page.goto(`${base}/metrics#gh_token=ghu_abc&expires_in=28800`);
+  await page.waitForSelector('#signin:not([hidden])');
+  assert.equal(await page.locator('#token').inputValue(), 'ghu_abc');
+  assert.equal(await page.evaluate(() => location.hash), '', 'token removed from the address bar');
+  assert.match(await page.locator('#signin').getAttribute('href'), /api\/auth\/login\?return=%2Fmetrics$/);
+  await page.goto(`${base}/#auth_error=Nope`);
+  await page.waitForSelector('#error:not([hidden])');
+  assert.match(await page.locator('#error').innerText(), /sign-in did not finish: Nope/);
   assert.deepEqual(errors, []);
 });
 

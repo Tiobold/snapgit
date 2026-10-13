@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>snapgit setup: tokens and hosting</title>
   <meta name="description" content="How to get a GitHub token for the snapgit web pages, and how to host them from your own GitHub repository.">
@@ -44,6 +44,17 @@
       <h3>Other hosts</h3>
       <p class="muted">Vercel: import the repository and set the Root Directory to <code>web</code>. Anywhere else: upload the <code>web/</code> folder to any static host, or run it locally with <code>npx serve web</code>. It has no build step.</p>
       <p class="hint">Hosts that cannot send headers (GitHub Pages included) rely on the content security policy each page carries in a meta tag, so the pages still only talk to <code>api.github.com</code>.</p>
+    </section>
+
+    <section class="panel" id="signin-setup">
+      <h2>Adding "Sign in with GitHub" (host operators)</h2>
+      <p class="muted">Optional, and the one piece that needs a server: three tiny functions in <code>web/api/</code> (Vercel runs them as is) that swap GitHub's sign-in code for a token, because that swap needs a secret. Nothing is stored. Without it the pages just keep the token field, and the button never appears (GitHub Pages included).</p>
+      <ol class="steps">
+        <li>Register a <strong>GitHub App</strong>: Settings, Developer settings, GitHub Apps, New GitHub App. Callback URL <code>https://YOUR-SITE/api/auth/callback</code>. Untick Webhook. Keep <em>Expire user authorization tokens</em> on. Repository permissions: <strong>Contents: Read and write</strong>, <strong>Pull requests: Read-only</strong>.</li>
+        <li>Generate a client secret. In your host's settings add the environment variables <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> (and <code>PUBLIC_URL</code> if you serve it from a custom domain), then redeploy.</li>
+        <li>Each team installs the App on the repositories they review in (the App's page, Install App). Sign-in tokens only reach repositories where the App is installed <em>and</em> the person has access, they expire after 8 hours, and they are handed to the page in the URL fragment, which is never sent to any server and is removed from the address bar at once.</li>
+      </ol>
+      <p class="hint">Why an App and not an OAuth app? An OAuth app can only ask for the broad <code>repo</code> scope (every repository you can reach). An App gets just Contents and Pull requests, on the repositories it is installed on.</p>
     </section>
 
     <section class="panel" id="no-web">
