@@ -117,6 +117,22 @@
   },
   {
     "id": "scene13",
+    "kind": "shot",
+    "kicker": "Did it actually help?",
+    "image": "assets/metrics-phone.png",
+    "caption": "Metrics. Demo data.",
+    "narration": "Did it actually help? Now you can measure it. Time to merge. How many pull requests nobody even opened. How often agents fail C I. By team. Never by person. [pause 0.3] This one is demo data."
+  },
+  {
+    "id": "scene14",
+    "kind": "terminal",
+    "kicker": "For your agents",
+    "code": "$ snapgit init --agent\n🤖 agent skill: wrote .claude/skills/snapgit/SKILL.md, AGENTS.md\n\n$ snapgit pr send -m \"Fix login\" --json\n{\n  \"ok\": true,\n  \"id\": \"7d77cb77\",\n  \"lines\": 1,\n  \"fuseMs\": 15000,\n  ...\n}",
+    "caption": "Agents learn the rules.",
+    "narration": "Your A I agents can use it too. One command teaches them the rules: timers, one button, and don't fail C I. Every command speaks Jason."
+  },
+  {
+    "id": "scene15",
     "kind": "terminal",
     "kicker": "Because why not",
     "code": "$ snapgit streak\n🔥 1 day streak. Longest: 1.\n\n$ snapgit story\n📖 your story, last 1d\n   10b4462  Merge wip/login into main  (origin/main)\n   4a649a8  init  (no branch tip)\n   30e2104  fix login  (no branch tip)\n   🔥 1 day streak\n   (this story will not be saved)",
@@ -124,7 +140,7 @@
     "narration": "Yes, there are commit streaks. And stories that disappear. Because why not."
   },
   {
-    "id": "scene14",
+    "id": "scene16",
     "kind": "outro",
     "big": "No servers.",
     "sub": "No waiting.",

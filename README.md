@@ -7,6 +7,8 @@ but every feature really works, on plain git or on real GitHub PRs.
 ```
 npx snapgit help          # or: npm i -g snapgit        (Node 20+; this repo: npm link)
 snapgit init              # hooks, so sweeping happens by itself
+snapgit init --agent      # teach coding agents the rules (skill + AGENTS.md)
+snapgit init --workflow   # put real GitHub PRs on the clock (the Action)
 ```
 
 ## The model in four rules
@@ -146,6 +148,15 @@ Most teams review in GitHub, so `action.yml` applies the same rules to ordinary 
 requests changes), CI is GitHub's own checks, and `/snapgit undo` opens a GitHub revert PR. Unopened PRs are closed and
 their branches deleted; shamed PRs too. See [action/README.md](action/README.md) for the workflow to paste in.
 
+## For coding agents
+
+AI agents are the reason review is the bottleneck, so snapgit is built to be used by them. `snapgit skill` prints a
+short skill (the rules, the workflow, good behavior) and `snapgit init --agent` writes it to `.claude/skills/snapgit/SKILL.md`
+plus an idempotent block in `AGENTS.md`. The source is [skills/snapgit/SKILL.md](skills/snapgit/SKILL.md). Commands agents
+parse have `--json`: `snapgit status --json` (what is on the clock, live PRs, frozen), `snapgit ls --json`,
+`snapgit pr ls --json`, and `snapgit pr send --json` (`{ok, id, lines, fuseMs, ...}`, or `{ok:false, shamed:{...}}` with exit 1
+when CI fails). The skill tells an agent to run the project's tests before sending, because failing CI deletes its branch.
+
 ## Metrics
 
 `snapgit metrics` (or the dashboard at `web/metrics.html`) answers: did review get faster, how many PRs did nobody open, how often do reviewers reject, and do agent-written PRs fail CI more than human ones.
@@ -166,7 +177,7 @@ settled, so survivorship bias and team or season differences apply.
 ## Web
 
 `web/` is a static site (deploy on Vercel with root directory `web`): review a PR in a browser, with a size-based countdown,
-by talking to the GitHub API. See [web/README.md](web/README.md).
+by talking to the GitHub API, plus the metrics dashboard at `/metrics`. See [web/README.md](web/README.md).
 
 ## For fun
 
@@ -174,11 +185,11 @@ by talking to the GitHub API. See [web/README.md](web/README.md).
 
 ## Tests, platforms, the video
 
-`npm test` runs ~95 tests against real temporary git repos, two clones racing, and the Action against an in-memory GitHub
+`npm test` runs ~150 tests against real temporary git repos, two clones racing, and the Action against an in-memory GitHub
 served over HTTP. `npm run test:e2e` drives the web UI in Chromium. CI runs on Linux, macOS and Windows; tests that need a unix
 shell (`cat`, `test -f`) skip on Windows. `SNAPGIT_NOW` (epoch ms) overrides the clock; `SNAPGIT_FUSE_MS` pins the fuse.
 
-`docs/video/snapgit-tiktok.mp4` is the 99 second 1080x1920 pitch, built by `docs/video/build.sh` from `scenes.json` (HTML
+`docs/video/snapgit-tiktok.mp4` is the roughly two minute 1080x1920 pitch, built by `docs/video/build.sh` from `scenes.json` (HTML
 slides, headless Chromium, offline Kokoro narration, ffmpeg). Caption and hashtags: `docs/video/tiktok-caption.txt`.
 
 ## Trust model

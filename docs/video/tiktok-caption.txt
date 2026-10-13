@@ -1,5 +1,5 @@
 Leadership wants us to use AI more. AI writes the PR in minutes. Review takes days. 🫠
-snapgit: branches with self-destruct timers, PRs with one button (reject, or it merges 60s after you open it), and CI that shames the author, human or agent, and deletes the branch.
+snapgit: branches with self-destruct timers, PRs with one button (reject, or it merges when a fuse sized to the change burns out), CI that shames the author, human or agent, and metrics so you can see if review actually got faster.
 github.com/Tiobold/snapgit
 
 #git #github #devtok #ai #aiagents #programming #softwareengineer #opensource

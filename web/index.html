@@ -68,11 +68,14 @@
       <div class="card"><h3>🚫 One button</h3><p>A PR can only be rejected. Open it and a fuse is lit, sized to the change: when it burns out, it merges into main unless you said no. Never opened? It is deleted, not merged.</p></div>
       <div class="card"><h3>🔀 Merge by neglect</h3><p>No approvals, no LGTM. Silence is consent. Your sender's snapgit does the merge with plain git.</p></div>
       <div class="card"><h3>😬 CI shame</h3><p>Checks run before a PR is sent and again before it merges. Fail, and the authors (human or agent) are shamed and the branch self-destructs.</p></div>
+      <div class="card"><h3>📊 Metrics, by team</h3><p>Did review get faster? How many PRs did nobody open? Do agents fail CI more than people? <a href="metrics">See the dashboard</a>. Never per person; groups under three are hidden.</p></div>
+      <div class="card"><h3>🤖 Built for agents</h3><p><code>snapgit init --agent</code> teaches Claude Code and friends the rules, and every command they need speaks <code>--json</code>. Fail CI and the agent is shamed like anyone else.</p></div>
+      <div class="card"><h3>🔌 On real GitHub PRs</h3><p>The GitHub Action puts ordinary pull requests on the same clock, with a bot comment for state and nothing to host. <code>snapgit init --workflow</code> installs it.</p></div>
       <div class="card"><h3>🖥️ No servers</h3><p>This page talks straight to GitHub. PRs are refs in your own repository, so there is nothing of ours to go down.</p></div>
     </section>
 
     <section class="panel video">
-      <h2>See it in 99 seconds</h2>
+      <h2>See it in under two minutes</h2>
       <video controls preload="none" playsinline poster="" src="assets/snapgit-tiktok.mp4"></video>
     </section>
   </main>

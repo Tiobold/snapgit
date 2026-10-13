@@ -14,6 +14,7 @@ import { listOutcomes, publishOutcomes } from './outcomes.js';
 import { normalizeOutcome, summarize, insights, fmtDuration, pct, aggregatesCsv, recordsCsv } from '../web/lib/metrics.js';
 import { resolveReviewers, ident } from './authz.js';
 import { defaultBranch, currentBranch } from './git.js';
+import { installAgent, installWorkflow, skillText } from './agent.js';
 import { readFileSync } from 'node:fs';
 
 const HELP = `snapgit: git, but it disappears
@@ -21,21 +22,24 @@ const HELP = `snapgit: git, but it disappears
 BRANCHES
   snapgit snap <branch> [--ttl 24h] [--from <ref>] [--stay]   new branch with a self-destruct timer
                                                               (24h by default; it can never be extended)
-  snapgit ls                                                  branches on the clock
+  snapgit ls [--json]                                         branches on the clock
   snapgit push [branch] [-r origin]                           push a branch and publish its timer, so any
                                                               runner can delete it on time
   snapgit sweep [-r origin] [--dry-run] [--quiet] [--offline] delete expired branches, settle due PRs
   snapgit watch [-r origin] [--every 5s]                      keep sweeping so fuses burn on time
-  snapgit init                                                install hooks so sweeping is automatic
+  snapgit init [--agent] [--workflow]                         install hooks so sweeping is automatic; --agent adds the
+                                                              coding-agent skill + AGENTS.md block, --workflow the GitHub Action
+  snapgit status [--json]                                     what is on the clock, live PRs, frozen or not (for people and agents)
+  snapgit skill                                               print the coding-agent skill (rules of the road for AI agents)
   snapgit graveyard                                           branches that can be resurrected
   snapgit resurrect <branch>                                  bring one back (with a fresh timer)
 
 PULL REQUESTS  (no approve: reject, or it merges. Never opened? It is deleted)
-  snapgit pr send [branch] [--base main] [-m "title\nbody"] [--ttl 24h] [-r origin]
+  snapgit pr send [branch] [--base main] [-m "title\nbody"] [--ttl 24h] [-r origin] [--json]
   snapgit pr open <id> [-r origin]                            read the changes; lights a fuse sized to them
   snapgit pr reject <id> [-m reason] [-r origin]              the only button there is
   snapgit pr approve <id> [-r origin]                         only for PRs touching protectedPaths
-  snapgit pr ls [-r origin]                                   live PRs
+  snapgit pr ls [-r origin] [--json]                          live PRs
   snapgit pr checks <id>                                      run the CI checks on the would-be merge
   snapgit pr receipts [-r origin]                             who opened (or screenshotted) your PRs
   snapgit pr burn <id> [-r origin]                            withdraw it (no merge)
@@ -61,7 +65,7 @@ Notifications: git config snapgit.notifyCommand / snapgit.slackWebhook.
 `;
 
 const paint = (code, s) => (process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[${code}m${s}\x1b[0m` : s);
-const out = (s = '') => process.stdout.write(s + '\n');
+const out = (s = '') => { process.stdout.write(s + '\n'); };
 const when = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
 
 export async function main(argv, cwd = process.cwd()) {
@@ -144,8 +148,10 @@ const COMMANDS = {
   },
 
   ls(argv, cwd) {
+    const { values } = args(argv, { json: { type: 'boolean' } }, false);
     sweepQuiet(cwd);
     const snaps = listSnaps(cwd);
+    if (values.json) return out(JSON.stringify(snaps.map((x) => ({ name: x.name, tip: x.tip, expiresAt: x.expiresAt, msLeft: x.expiresAt - now() })), null, 2));
     if (!snaps.length) return out('no branches on the clock. snapgit snap <name> to start one');
     for (const s of snaps) {
       const left = s.expiresAt - now();
@@ -271,8 +277,44 @@ const COMMANDS = {
   },
 
   init(argv, cwd) {
+    const { values } = args(argv, { agent: { type: 'boolean' }, workflow: { type: 'boolean' } }, false);
     const installed = installHooks(cwd);
     out(installed.length ? `hooks installed: ${installed.join(', ')}. Expired branches now vanish on their own.` : 'hooks already installed');
+    if (values.agent) out(`🤖 agent skill: wrote ${installAgent(cwd).join(', ') || 'nothing new'}`);
+    if (values.workflow) {
+      const w = installWorkflow(cwd);
+      out(w ? `🤖 wrote ${w}. Commit it to your default branch to put real PRs on the clock` : 'the workflow already exists, left alone');
+    }
+  },
+
+  skill() {
+    process.stdout.write(skillText());
+  },
+
+  status(argv, cwd) {
+    const { values } = args(argv, { json: { type: 'boolean' }, remote: { type: 'string', short: 'r' } }, false);
+    sweepQuiet(cwd);
+    const snaps = listSnaps(cwd).map((x) => ({ name: x.name, expiresAt: x.expiresAt, msLeft: x.expiresAt - now() }));
+    const prs = listLocalPrs(cwd).map((r) => {
+      const rc = receiptFor(r.id, cwd);
+      const dueAt = Math.min(r.expiresAt, rc ? rc.openedAt + fuseOf(r) : Infinity);
+      return { id: r.id, title: r.title, head: r.head, base: r.base, lines: r.lines, opened: !!rc, openedBy: rc?.opener ?? null, validated: !!r.validated, protected: !!r.protected, mergesAt: rc ? dueAt : null, expiresAt: r.expiresAt };
+    });
+    const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
+    const st = {
+      branch: currentBranch(cwd),
+      onTheClock: snaps,
+      prs,
+      frozen: frozenReason({ cwd }) ?? null,
+      shamed: listShame({ cwd, remote }).length,
+      merged: listMerged(cwd).length,
+    };
+    if (values.json) return out(JSON.stringify(st, null, 2));
+    const here = snaps.find((x) => x.name === st.branch);
+    out(`on ${st.branch}${here ? `: disappears in ${formatDuration(here.msLeft)}` : ' (no timer)'}`);
+    out(`${snaps.length} branch${snaps.length === 1 ? '' : 'es'} on the clock, ${prs.length} live PR${prs.length === 1 ? '' : 's'}, ${st.merged} merged, ${st.shamed} shamed`);
+    for (const p of prs) out(`   ${p.id}  ${p.title}  ${p.opened ? `opened by ${p.openedBy}, merges in ${formatDuration(Math.max(0, p.mergesAt - now()))}` : `unopened, deleted in ${formatDuration(Math.max(0, p.expiresAt - now()))}`}`);
+    if (st.frozen) out(`🧊 frozen: ${st.frozen}`);
   },
 
   story(argv, cwd) {
@@ -302,10 +344,21 @@ const COMMANDS = {
     const [sub, ...rest] = argv;
     const remoteOpt = { remote: { type: 'string', short: 'r' } };
     if (sub === 'send') {
-      const { values, positionals } = args(rest, { ...remoteOpt, ...TTL, base: { type: 'string', short: 'b' }, message: { type: 'string', short: 'm' } });
+      const { values, positionals } = args(rest, { ...remoteOpt, ...TTL, base: { type: 'string', short: 'b' }, message: { type: 'string', short: 'm' }, json: { type: 'boolean' } });
       const remote = values.remote;
       if (remote && !hasRemote(remote, cwd)) throw new Error(`no remote named ${remote}`);
       const sent = createPr({ cwd, head: positionals[0], base: values.base, message: values.message, ttlMs: values.ttl ? parseDuration(values.ttl) : undefined, remote });
+      if (values.json) {
+        if (sent.shame) {
+          const r = sent.shame;
+          sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) });
+          out(JSON.stringify({ ok: false, shamed: { head: r.head, check: r.check, exitCode: r.exitCode ?? null, timedOut: !!r.timedOut, message: r.message, output: r.output ?? '' } }, null, 2));
+          return 1;
+        }
+        const p = sent.pr;
+        out(JSON.stringify({ ok: true, id: p.id, title: p.title, head: p.head, base: p.base, lines: p.lines, fuseMs: p.fuseMs, expiresAt: p.expiresAt, protected: !!p.protected, checksPassed: sent.ran ?? 0, warnings: sent.warnings ?? [] }, null, 2));
+        return;
+      }
       if (sent.shame) {
         const r = sent.shame;
         out(`😬 not sent: ${r.head} failed CI before anyone had to look at it ("${r.check}" ${r.timedOut ? 'timed out' : `exited ${r.exitCode}`})`);
@@ -353,8 +406,18 @@ const COMMANDS = {
       return;
     }
     if (sub === 'ls') {
-      const { values } = args(rest, remoteOpt, false);
+      const { values } = args(rest, { ...remoteOpt, json: { type: 'boolean' } }, false);
       const local = listLocalPrs(cwd);
+      if (values.json) {
+        const remoteOnly = values.remote ? listRemotePrIds(values.remote, cwd).filter((id) => !local.some((r) => r.id === id)) : [];
+        return out(JSON.stringify({
+          prs: local.map((r) => {
+            const rc = receiptFor(r.id, cwd);
+            return { id: r.id, title: r.title, head: r.head, base: r.base, lines: r.lines, opened: !!rc, openedBy: rc?.opener ?? null, mergesAt: rc ? Math.min(r.expiresAt, rc.openedAt + fuseOf(r)) : null, expiresAt: r.expiresAt };
+          }),
+          remoteOnly,
+        }, null, 2));
+      }
       for (const r of local) {
         const rc = receiptFor(r.id, cwd);
         const due = Math.min(r.expiresAt, rc ? rc.openedAt + fuseOf(r) : Infinity);

@@ -1,6 +1,6 @@
 {
   "name": "snapgit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Git meets Snapchat: self-destructing branches, pull requests with one button (reject, or it merges), CI shame, undo, and a GitHub Action.",
   "type": "module",
   "bin": {
@@ -37,6 +37,7 @@
     "bin",
     "src",
     "web/lib",
+    "skills",
     "action",
     "action.yml",
     "README.md",
