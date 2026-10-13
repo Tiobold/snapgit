@@ -71,3 +71,7 @@ footer { padding: 24px 0 48px; color: var(--muted); font-size: .9rem; }
 .steps { margin: 14px 0; padding-left: 1.3em; line-height: 1.55; }
 .steps li { margin-bottom: 10px; }
 .panel h3 { margin: 18px 0 6px; }
+.stack { display: grid; gap: 14px; }
+.check { display: flex; gap: 8px; align-items: center; }
+.creds { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 14px 0; }
+.creds dt { color: var(--muted); } .creds dd { margin: 0; word-break: break-all; }

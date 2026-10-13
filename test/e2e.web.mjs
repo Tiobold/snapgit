@@ -302,6 +302,36 @@ await test('sign in with GitHub: hidden without the server piece; shown when con
   assert.deepEqual(errors, []);
 });
 
+await test('create-app: manifest is minimal, state is checked, a code becomes credentials', async () => {
+  const { page, errors } = await newPage();
+  let posted;
+  await page.route('https://github.com/settings/apps/new*', async (r) => { posted = { url: r.request().url(), body: r.request().postData() }; await r.fulfill({ status: 200, contentType: 'text/html', body: '<p>github</p>' }); });
+  await page.route('https://api.github.com/app-manifests/**', (r) => r.fulfill(r.request().url().includes('/goodcode/') ? jsonRes(201, { slug: 'snapgit-x', name: 'snapgit-x', client_id: 'Iv1.abc', client_secret: 'sek', pem: 'SECRET-KEY' }) : jsonRes(404, {})));
+  await page.goto(`${base}/create-app`);
+  await page.fill('#name', 'snapgit-x');
+  await page.click('#form button[type=submit]');
+  await page.waitForFunction(() => document.body.innerText.includes('github'));
+  const manifest = JSON.parse(decodeURIComponent(posted.body.split('manifest=')[1].replace(/\+/g, ' ')));
+  assert.deepEqual(manifest.default_permissions, { contents: 'write', pull_requests: 'read' });
+  assert.equal(manifest.callback_urls[0], `${base}/api/auth/callback`);
+  assert.equal(manifest.public, false); assert.equal(manifest.hook_attributes.active, false);
+  const state = new URL(posted.url).searchParams.get('state');
+  await page.goto(`${base}/create-app?code=goodcode&state=${state}`);
+  // a fresh navigation lost the tab state? sessionStorage survives same-tab navigation, so this works
+  await page.waitForSelector('#done:not([hidden])');
+  assert.equal(await page.locator('#cid').innerText(), 'Iv1.abc');
+  assert.equal(await page.locator('#csec').innerText(), 'sek');
+  assert.doesNotMatch(await page.locator('body').innerText(), /SECRET-KEY/, 'the private key is never shown');
+  assert.equal(await page.evaluate(() => location.search), '');
+  // wrong state: the code is not used
+  const p2 = await newPage();
+  await p2.page.goto(`${base}/create-app?code=goodcode&state=forged`);
+  await p2.page.waitForSelector('#error:not([hidden])');
+  assert.match(await p2.page.locator('#error').innerText(), /did not start on this page/);
+  assert.equal(await p2.page.locator('#done').isHidden(), true);
+  assert.deepEqual(errors, []);
+});
+
 await browser.close(); server.close();
 for (const [s, name, e] of results) console.log(s === 'ok' ? '✔' : '✘', name, e ? `\n   ${e.message}` : '');
 process.exit(results.some((r) => r[0] === 'FAIL') ? 1 : 0);

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create the snapgit GitHub App</title>
+  <meta name="description" content="Register the GitHub App that powers Sign in with GitHub, in two clicks.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%91%BB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="badge"><a href="./">👻 snapgit</a></p>
+    <h1>Create the GitHub App</h1>
+    <p class="lede">For whoever runs this site. Two clicks register the App that powers "Sign in with GitHub", with only the permissions snapgit needs.</p>
+  </header>
+  <main>
+    <section class="panel" id="start">
+      <h2>1. Register it</h2>
+      <p class="muted">GitHub will show you the App (name, callback <code id="cb"></code>, permissions: Contents read and write, Pull requests read) and ask you to confirm. Nothing is created until you press the green button there.</p>
+      <form id="form" method="post" class="stack" autocomplete="off">
+        <label>App name <input id="name" value="snapgit" maxlength="34" spellcheck="false"></label>
+        <label>Organization <small>(optional: create it under an organization instead of your account)</small> <input id="org" placeholder="my-org" spellcheck="false"></label>
+        <label class="check"><input id="public" type="checkbox"> Let other accounts install it</label>
+        <input type="hidden" name="manifest" id="manifest">
+        <div class="row"><button class="btn primary" type="submit">Create the App on GitHub</button></div>
+      </form>
+      <p class="hint">App names are unique across GitHub. If <code>snapgit</code> is taken, pick another.</p>
+    </section>
+
+    <section class="panel" id="done" hidden>
+      <h2>2. Put these in your host</h2>
+      <p class="muted">Add them as environment variables (Vercel: Project, Settings, Environment Variables), then redeploy. The secret is shown here once and is not stored anywhere by this page.</p>
+      <dl class="creds">
+        <dt>GITHUB_CLIENT_ID</dt><dd><code id="cid"></code></dd>
+        <dt>GITHUB_CLIENT_SECRET</dt><dd><code id="csec"></code></dd>
+      </dl>
+      <h2>3. Install it</h2>
+      <p class="muted">Open <a id="install" rel="noreferrer noopener" href="https://github.com/apps">the App's install page</a> and choose the repositories you review in. Sign-in only reaches repositories where it is installed.</p>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+  </main>
+  <footer><a href="setup.html">Setup guide</a> · <a href="./">Review a PR</a></footer>
+  <script type="module" src="create-app.js"></script>
+</body>
+</html>
