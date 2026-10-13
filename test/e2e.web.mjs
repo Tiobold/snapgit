@@ -271,6 +271,18 @@ await test('metrics: mobile in light and dark has no horizontal scroll', async (
   }
 });
 
+await test('setup page: token and hosting guide render, linked from both pages, CSP clean', async () => {
+  const { page, errors } = await newPage();
+  await page.goto(base);
+  await page.click('a:has-text("How do I get a token?")');
+  assert.match(page.url(), /setup\.html#token$|\/setup#token$/);
+  assert.match(await page.locator('#token').innerText(), /Contents: Read and write/);
+  assert.match(await page.locator('#host').innerText(), /Settings, Pages/);
+  await page.goto(`${base}/metrics`);
+  assert.equal(await page.locator('a[href="setup.html#token"]').count(), 1);
+  assert.deepEqual(errors, []);
+});
+
 await browser.close(); server.close();
 for (const [s, name, e] of results) console.log(s === 'ok' ? '✔' : '✘', name, e ? `\n   ${e.message}` : '');
 process.exit(results.some((r) => r[0] === 'FAIL') ? 1 : 0);

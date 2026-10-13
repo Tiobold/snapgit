@@ -4,6 +4,12 @@ A static site (no build step, no server of ours) for reviewing snapgit PRs in a 
 API, using the same refs the CLI uses (`refs/snapgit/pr|receipt|reject/<id>`), so a PR sent from the CLI can be opened and
 rejected here, and the sender's `snapgit sweep` honors it.
 
+## Host it yourself
+
+**GitHub Pages (no Vercel needed):** fork the repository, Settings, Pages, Source: *GitHub Actions*, then Actions, *Deploy web to GitHub Pages*, Run workflow (`.github/workflows/pages.yml` publishes `web/`). The pages carry their own content security policy in a meta tag, so they stay locked down on hosts that cannot send headers.
+
+**Tokens:** see [setup.html](setup.html) for creating a fine-grained token (Contents: Read and write to open or reject; read-only Contents and Pull requests for the dashboard).
+
 ## Deploy on Vercel
 
 1. Push this repo to GitHub (done).

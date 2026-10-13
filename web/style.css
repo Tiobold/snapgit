@@ -68,3 +68,6 @@ form input { display: block; width: 100%; margin-top: 6px; padding: 11px 14px; f
 footer { padding: 24px 0 48px; color: var(--muted); font-size: .9rem; }
 [hidden] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+.steps { margin: 14px 0; padding-left: 1.3em; line-height: 1.55; }
+.steps li { margin-bottom: 10px; }
+.panel h3 { margin: 18px 0 6px; }

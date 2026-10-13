@@ -176,8 +176,17 @@ settled, so survivorship bias and team or season differences apply.
 
 ## Web
 
-`web/` is a static site (deploy on Vercel with root directory `web`): review a PR in a browser, with a size-based countdown,
-by talking to the GitHub API, plus the metrics dashboard at `/metrics`. See [web/README.md](web/README.md).
+`web/` is a static site: review a PR in a browser, with a size-based countdown, by talking to the GitHub API, plus the
+metrics dashboard at `/metrics`. See [web/README.md](web/README.md).
+
+**Getting a token.** Opening or rejecting in the browser needs a GitHub token (a page cannot sign you in without a server,
+and snapgit has none). Create a fine-grained one at <https://github.com/settings/personal-access-tokens/new>: only your
+repository, **Contents: Read and write** (the dashboard alone needs Contents and Pull requests read-only). It stays in the
+tab's memory and goes only to `api.github.com`. Details, and the classic-token and SSO route: [web/setup.html](web/setup.html).
+
+**Hosting it yourself on GitHub Pages.** Fork this repository, set Settings, Pages, Source to *GitHub Actions*, then run
+the *Deploy web to GitHub Pages* workflow from the Actions tab. Your copy lives at `https://<you>.github.io/snapgit/`.
+Vercel (Root Directory `web`) or any static host works too, and `npx serve web` runs it locally.
 
 ## For fun
 

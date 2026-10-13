@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>snapgit: GitHub, but disappearing is a feature</title>
   <meta name="description" content="Disappearing branches, pull requests with one button, and merge by neglect. Review snapgit PRs in your browser.">
@@ -30,7 +31,7 @@
         <label>Repository <input id="repo" name="repo" placeholder="owner/repo" spellcheck="false"></label>
         <label>PR id <input id="pr-id" name="id" placeholder="8 hex characters, e.g. 95962cb1" spellcheck="false" maxlength="8"></label>
         <label>GitHub token <input id="token" name="token" type="password" placeholder="needed to open or reject (repo scope)" autocomplete="off"></label>
-        <p class="hint">The token stays in this tab's memory and is only ever sent to api.github.com. Opening and rejecting write small refs (<code>refs/snapgit/*</code>) into the repository, exactly like the CLI.</p>
+        <p class="hint"><a href="setup.html#token">How do I get a token?</a> The token stays in this tab's memory and is only ever sent to api.github.com. Opening and rejecting write small refs (<code>refs/snapgit/*</code>) into the repository, exactly like the CLI.</p>
         <div class="row">
           <button class="btn primary" type="submit">Find PR</button>
           <button class="btn" type="button" id="demo">Try the demo</button>
@@ -68,7 +69,7 @@
       <div class="card"><h3>🚫 One button</h3><p>A PR can only be rejected. Open it and a fuse is lit, sized to the change: when it burns out, it merges into main unless you said no. Never opened? It is deleted, not merged.</p></div>
       <div class="card"><h3>🔀 Merge by neglect</h3><p>No approvals, no LGTM. Silence is consent. Your sender's snapgit does the merge with plain git.</p></div>
       <div class="card"><h3>😬 CI shame</h3><p>Checks run before a PR is sent and again before it merges. Fail, and the authors (human or agent) are shamed and the branch self-destructs.</p></div>
-      <div class="card"><h3>📊 Metrics, by team</h3><p>Did review get faster? How many PRs did nobody open? Do agents fail CI more than people? <a href="metrics">See the dashboard</a>. Never per person; groups under three are hidden.</p></div>
+      <div class="card"><h3>📊 Metrics, by team</h3><p>Did review get faster? How many PRs did nobody open? Do agents fail CI more than people? <a href="metrics.html">See the dashboard</a>. Never per person; groups under three are hidden.</p></div>
       <div class="card"><h3>🤖 Built for agents</h3><p><code>snapgit init --agent</code> teaches Claude Code and friends the rules, and every command they need speaks <code>--json</code>. Fail CI and the agent is shamed like anyone else.</p></div>
       <div class="card"><h3>🔌 On real GitHub PRs</h3><p>The GitHub Action puts ordinary pull requests on the same clock, with a bot comment for state and nothing to host. <code>snapgit init --workflow</code> installs it.</p></div>
       <div class="card"><h3>🖥️ No servers</h3><p>This page talks straight to GitHub. PRs are refs in your own repository, so there is nothing of ours to go down.</p></div>
@@ -80,7 +81,7 @@
     </section>
   </main>
 
-  <footer><a href="metrics">Metrics</a> · Hosted on a static site that talks to GitHub. We know. · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
+  <footer><a href="metrics.html">Metrics</a> · <a href="setup.html">Setup</a> · Hosted on a static site that talks to GitHub. We know. · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
   <script type="module" src="app.js"></script>
 </body>
 </html>

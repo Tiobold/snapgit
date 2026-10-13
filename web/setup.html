@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>snapgit setup: tokens and hosting</title>
+  <meta name="description" content="How to get a GitHub token for the snapgit web pages, and how to host them from your own GitHub repository.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%91%BB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="badge"><a href="./">👻 snapgit</a></p>
+    <h1>Setup: a token, or your own copy</h1>
+    <p class="lede">The web pages have no server. They talk straight from your browser to GitHub, so they need a token to write, and you can host them anywhere, including your own GitHub repository.</p>
+  </header>
+
+  <main>
+    <section class="panel" id="token">
+      <h2>Getting a GitHub token</h2>
+      <p class="muted">You need one to <strong>open or reject</strong> a PR, and for the metrics dashboard on a private repository. Reading a public repository needs none.</p>
+      <ol class="steps">
+        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" rel="noreferrer noopener">github.com/settings/personal-access-tokens/new</a> (Settings, Developer settings, Personal access tokens, Fine-grained tokens, Generate new token).</li>
+        <li>Name it <code>snapgit</code> and choose a short expiry (7 to 30 days is plenty).</li>
+        <li><strong>Resource owner</strong>: the user or organization that owns the repository. <strong>Repository access</strong>: <em>Only select repositories</em>, then pick just the repository you review in.</li>
+        <li>Under <strong>Repository permissions</strong> set <strong>Contents: Read and write</strong> to open or reject PRs (snapgit stores them as small refs, <code>refs/snapgit/*</code>). For the dashboard alone, <strong>Contents: Read-only</strong> and <strong>Pull requests: Read-only</strong> are enough.</li>
+        <li>Generate the token, copy it (GitHub shows it once) and paste it into the page. It stays in that tab's memory and is only ever sent to <code>api.github.com</code>. Close the tab and it is gone.</li>
+      </ol>
+      <p class="hint">Organization repository and the token is refused? The organization may require approval for fine-grained tokens (ask an owner), or use a classic token: Settings, Developer settings, Tokens (classic), scope <code>repo</code> (or <code>public_repo</code> for public repositories), then <em>Configure SSO</em> and authorize it if your organization uses SSO.</p>
+      <p class="hint">Why a token at all? A web page cannot sign you in to GitHub without a server somewhere. snapgit has none on purpose, so you hold the key, and it only ever lives in your browser.</p>
+    </section>
+
+    <section class="panel" id="host">
+      <h2>Hosting the web pages in your own GitHub repository</h2>
+      <p class="muted">The site is plain static files (the <code>web/</code> folder), so GitHub Pages can serve it. Nothing of ours is involved.</p>
+      <ol class="steps">
+        <li><strong>Fork</strong> <a href="https://github.com/Tiobold/snapgit" rel="noreferrer noopener">Tiobold/snapgit</a> (or copy its <code>web/</code> folder and <code>.github/workflows/pages.yml</code> into any repository you own).</li>
+        <li>In your fork: <strong>Settings, Pages</strong>, and set <strong>Source</strong> to <em>GitHub Actions</em>.</li>
+        <li>Open the <strong>Actions</strong> tab, enable workflows if GitHub asks, choose <strong>Deploy web to GitHub Pages</strong> and press <strong>Run workflow</strong>.</li>
+        <li>A minute later your site is at <code>https://YOUR-NAME.github.io/snapgit/</code>. Add <code>?repo=owner/name</code> to the metrics address to prefill the repository.</li>
+      </ol>
+      <p class="hint">Private repositories on a private Pages site work the same way (Pages visibility is a Settings option on paid plans). A custom domain goes under Settings, Pages.</p>
+      <h3>Other hosts</h3>
+      <p class="muted">Vercel: import the repository and set the Root Directory to <code>web</code>. Anywhere else: upload the <code>web/</code> folder to any static host, or run it locally with <code>npx serve web</code>. It has no build step.</p>
+      <p class="hint">Hosts that cannot send headers (GitHub Pages included) rely on the content security policy each page carries in a meta tag, so the pages still only talk to <code>api.github.com</code>.</p>
+    </section>
+
+    <section class="panel" id="no-web">
+      <h2>Prefer no web page at all?</h2>
+      <p class="muted">The CLI needs no token, because it uses your own git credentials: <code>snapgit pr open &lt;id&gt; -r origin</code>. And on real GitHub PRs, the Action works with the workflow's built-in token: <code>snapgit init --workflow</code>.</p>
+    </section>
+  </main>
+
+  <footer><a href="./">Review a PR</a> · <a href="metrics.html">Metrics</a> · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
+</body>
+</html>

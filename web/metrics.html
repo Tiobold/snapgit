@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; media-src 'self'; style-src 'self'; script-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>snapgit metrics: how review is going</title>
   <meta name="description" content="Time to merge, where the time goes, how many PRs nobody opened, and how AI-written PRs fare. By team, never by person.">
@@ -18,7 +19,7 @@
   <main>
     <form id="filters" class="filters" aria-label="Filters" autocomplete="off">
       <label class="field">Repository <input id="repo" placeholder="owner/repo" spellcheck="false"></label>
-      <label class="field">Token <small>(optional)</small> <input id="token" type="password" placeholder="raises rate limits; needed for private repos" autocomplete="off"></label>
+      <label class="field">Token <small>(optional, <a href="setup.html#token">how?</a>)</small> <input id="token" type="password" placeholder="raises rate limits; needed for private repos" autocomplete="off"></label>
       <button class="btn primary" type="submit">Load</button>
       <button class="btn" type="button" id="demo">Demo data</button>
       <span class="sep" aria-hidden="true"></span>
@@ -79,7 +80,7 @@
   </main>
 
   <div id="tip" class="tip" role="tooltip" hidden></div>
-  <footer>snapgit · <a href="./">review a PR</a> · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
+  <footer>snapgit · <a href="./">review a PR</a> · <a href="setup.html">setup</a> · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
   <script type="module" src="metrics.js"></script>
 </body>
 </html>
