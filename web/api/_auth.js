@@ -15,6 +15,19 @@ function origin(req, env = process.env) {
   return `${proto}://${host}`;
 }
 
+// Best-effort abuse brake: a per-instance, per-IP counter. Serverless instances come and go, so this slows scripted
+// hammering rather than guaranteeing a quota (the secret is never exposed either way).
+const hits = new Map();
+function limited(req, bucket, max = 30, windowMs = 60_000, now = Date.now()) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  const key = `${bucket}:${ip}`;
+  const rec = hits.get(key);
+  if (!rec || now - rec.start > windowMs) { hits.set(key, { start: now, n: 1 }); if (hits.size > 5000) for (const [k, v] of hits) if (now - v.start > windowMs) hits.delete(k); return false; }
+  rec.n += 1;
+  return rec.n > max;
+}
+const tooMany = (res) => send(res, 429, { 'Content-Type': 'application/json', 'Retry-After': '60' }, '{"error":"Too many sign-in attempts. Wait a minute."}');
+
 function send(res, status, headers = {}, body = '') {
   res.statusCode = status;
   for (const [k, v] of Object.entries({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', ...headers })) res.setHeader(k, v);
@@ -26,10 +39,11 @@ const cookieOf = (req) => Object.fromEntries((req.headers.cookie || '').split(/;
 const setCookie = (value, maxAge, secure) => `${COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/api/auth; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 
 function status(req, res, env = process.env) {
-  json(res, 200, { enabled: enabled(env) });
+  json(res, 200, { enabled: enabled(env), installUrl: env.GITHUB_APP_SLUG && enabled(env) ? `https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new` : null });
 }
 
 function login(req, res, env = process.env) {
+  if (limited(req, 'login')) return tooMany(res);
   if (!enabled(env)) return json(res, 503, { error: 'Sign in with GitHub is not configured on this host. Use a token instead.' });
   const url = new URL(req.url, 'http://x');
   const ret = RETURNS.has(url.searchParams.get('return')) ? url.searchParams.get('return') : '/';
@@ -43,6 +57,7 @@ function login(req, res, env = process.env) {
 }
 
 async function callback(req, res, env = process.env, fetchImpl = fetch) {
+  if (limited(req, 'callback')) return tooMany(res);
   const o = origin(req, env);
   const url = new URL(req.url, 'http://x');
   const [state, retEnc] = (cookieOf(req) || '').split('|');
@@ -72,4 +87,4 @@ async function callback(req, res, env = process.env, fetchImpl = fetch) {
   back(q.toString());
 }
 
-module.exports = { enabled, status, login, callback, RETURNS };
+module.exports = { enabled, status, login, callback, RETURNS, limited };

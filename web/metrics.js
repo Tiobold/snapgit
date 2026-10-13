@@ -1,6 +1,6 @@
 import { summarize, insights, fmtDuration, pct, filterRecords, demoRecords, aggregatesCsv, recordsCsv, KINDS, DAY } from './lib/metrics.js';
 import { loadFromGitHub } from './lib/metrics-data.js';
-import { initSignIn } from './lib/auth.js';
+import { initSignIn, installHint } from './lib/auth.js';
 import { parseRepo } from './lib/core.js';
 
 const $ = (id) => document.getElementById(id);
@@ -357,7 +357,7 @@ $('filters').addEventListener('submit', async (e) => {
     if (!records.length) { $('error').textContent = 'Nothing to show: no outcomes and no closed PRs were found.'; $('error').hidden = false; }
   } catch (err) {
     $('board').classList.remove('loading');
-    $('error').textContent = err.message;
+    $('error').textContent = err.message + (/not found/.test(err.message) ? installHint($('token').value.trim()) : '');
     $('error').hidden = false;
   }
 });

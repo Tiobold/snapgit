@@ -1,5 +1,5 @@
 import { fuseOf, parseRepo, isPrId, mergesAt, clock, parseDiff } from './lib/core.js';
-import { initSignIn } from './lib/auth.js';
+import { initSignIn, installHint } from './lib/auth.js';
 import { GitHubBackend, DemoBackend, demoRecord } from './lib/backends.js';
 
 const $ = (id) => document.getElementById(id);
@@ -23,7 +23,7 @@ async function load(backend, id) {
   $('diff').dataset.id = '';
   try {
     state.record = await backend.getPr(id);
-    if (!state.record) throw new Error(`PR ${id} is gone: it merged, was rejected, was withdrawn, or never existed.`);
+    if (!state.record) throw new Error(`PR ${id} is gone: it merged, was rejected, was withdrawn, or never existed.${installHint(backend.token)}`);
     if (backend.token || backend.demo) state.me = await backend.whoami().catch(() => null);
     await refresh();
   } catch (e) {

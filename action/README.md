@@ -10,6 +10,12 @@ whose name starts with `snapgit` so it never waits on itself.
 
 PRs opened after the workflow lands go on the clock. Older PRs are left alone until you add the `snapgit` label.
 
+## Piloting it safely
+
+Start with `opt-in: label` on the first step (and the wait job). Nothing changes for anyone until a PR is labelled `snapgit`,
+so you can try it on one PR, then one team, then everyone. Pin the action to a commit SHA (`uses: Tiobold/snapgit@<sha>`)
+rather than `@master` if your organization restricts third-party actions, and add the repository to its allowed actions list.
+
 ## How a PR moves
 
 | What happens | Result |
@@ -42,7 +48,7 @@ run, so a branch dies on time even if nobody's laptop is awake.
 ## Inputs
 
 `token` (defaults to `github.token`), `mode` (`auto`, `sweep`, `wait`), `pr` (for `wait`), `max-wait` (seconds a wait job may
-sleep, default 21000), `metrics-branch` (default `snapgit-metrics`; `none` disables outcome recording), `poll-seconds` (default 20), `ignore-checks` (name prefixes, default `snapgit`), `ci-grace-seconds` (default 30).
+sleep, default 21000), `opt-in` (`all` by default; `label` touches only PRs labelled `snapgit`, the safe way to pilot), `metrics-branch` (default `snapgit-metrics`; `none` disables outcome recording), `poll-seconds` (default 20), `ignore-checks` (name prefixes, default `snapgit`), `ci-grace-seconds` (default 30).
 Outputs: `wait-pr`, `wait-until` (set when a fuse was lit, so a second job can wait on it).
 
 ## Honest limits

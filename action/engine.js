@@ -21,7 +21,7 @@ const identOf = (login) => `${login} <${login}@users.noreply.github.com>`;
 const iso = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
 const SAFE_BRANCHES = ['main', 'master', 'trunk', 'develop'];
 
-export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], ciGraceMs = 30_000, metricsBranch = 'snapgit-metrics', log = () => {} }) {
+export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], ciGraceMs = 30_000, metricsBranch = 'snapgit-metrics', optIn = 'all', log = () => {} }) {
   const defaults = () => ({ ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [] });
 
   async function policyFor(base) {
@@ -118,6 +118,8 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
   async function onPullRequest(pr, action, label) {
     if (pr.draft || pr.state !== 'open') return {};
     if (action === 'labeled' && label !== 'snapgit') return {};
+    // opt-in mode (pilots): only PRs carrying the "snapgit" label are ever touched
+    if (optIn === 'label' && action !== 'labeled' && !(pr.labels ?? []).some((l) => (l.name ?? l) === 'snapgit')) return {};
     if (['opened', 'reopened', 'ready_for_review', 'labeled'].includes(action)) { await ensure(pr); return {}; }
     if (action === 'synchronize') {
       const loaded = await load(pr.number);

@@ -5,7 +5,7 @@ deletes the branch, and an undo for everything. A joke with a pitch (AI writes P
 but every feature really works, on plain git or on real GitHub PRs.
 
 ```
-npx snapgit help          # or: npm i -g snapgit        (Node 20+; this repo: npm link)
+npx github:Tiobold/snapgit help      # or: npm i -g github:Tiobold/snapgit     (Node 20+)
 snapgit init              # hooks, so sweeping happens by itself
 snapgit init --agent      # teach coding agents the rules (skill + AGENTS.md)
 snapgit init --workflow   # put real GitHub PRs on the clock (the Action)

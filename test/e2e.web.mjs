@@ -340,6 +340,25 @@ await test('?demo opens the demo PR directly', async () => {
   assert.deepEqual(errors, []);
 });
 
+await test('signed in but App not installed: "not found" explains the install step', async () => {
+  const { page } = await newPage();
+  await page.route('**/api/auth/status', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"enabled":true,"installUrl":"https://github.com/apps/snapgit-x/installations/new"}' }));
+  await page.route('https://api.github.com/repos/o/private/**', (r) => r.fulfill(jsonRes(404, {})));
+  await page.goto(`${base}/metrics#gh_token=ghu_abc`);
+  await page.waitForSelector('#signin:not([hidden])');
+  await page.fill('#repo', 'o/private');
+  await page.click('#filters button[type=submit]');
+  await page.waitForSelector('#error:not([hidden])');
+  const msg = await page.locator('#error').innerText();
+  assert.match(msg, /not found/);
+  assert.match(msg, /App has to be installed.*apps\/snapgit-x\/installations\/new/s);
+  await page.goto(`${base}/`);
+  await page.fill('#repo', 'o/private'); await page.fill('#pr-id', 'deadbeef'); await page.fill('#token', 'plain-token');
+  await page.click('#find button[type=submit]');
+  await page.waitForSelector('#error:not([hidden])');
+  assert.doesNotMatch(await page.locator('#error').innerText(), /App has to be installed/, 'hint only for sign-in tokens');
+});
+
 await browser.close(); server.close();
 for (const [s, name, e] of results) console.log(s === 'ok' ? '✔' : '✘', name, e ? `\n   ${e.message}` : '');
 process.exit(results.some((r) => r[0] === 'FAIL') ? 1 : 0);

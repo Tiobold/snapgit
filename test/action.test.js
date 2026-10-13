@@ -705,3 +705,20 @@ test('metrics: the metrics-branch input names the branch, and "none" disables it
   assert.ok(!f.db.branches.has('snapgit-metrics'));
   await f.close();
 });
+
+test('opt-in mode: only PRs labelled "snapgit" go on the clock, and the label can arrive later', async () => {
+  const f = await createFakeGitHub();
+  const engine = createEngine({ gh: new GitHub({ token: 't', repo: f.repo, apiUrl: f.url }), now: () => T0, ciGraceMs: 0, optIn: 'label', metricsBranch: '' });
+  const plain = f.addPull();
+  await engine.onPullRequest(plain, 'opened');
+  assert.equal(f.state(plain.number), null, 'unlabelled PR untouched');
+  const tagged = f.addPull();
+  tagged.labels = [{ name: 'snapgit' }];
+  await engine.onPullRequest(tagged, 'opened');
+  assert.ok(f.state(tagged.number), 'labelled PR on the clock');
+  await engine.onPullRequest(plain, 'synchronize');
+  assert.equal(f.state(plain.number), null);
+  await engine.onPullRequest(plain, 'labeled', 'snapgit');
+  assert.ok(f.state(plain.number), 'adding the label opts it in');
+  await f.close();
+});

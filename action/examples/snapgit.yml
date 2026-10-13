@@ -31,6 +31,8 @@ jobs:
     steps:
       - id: snapgit
         uses: Tiobold/snapgit@master
+        # with:
+        #   opt-in: label   # pilot mode: only PRs labelled "snapgit" are touched
 
   # When a reviewer lights a fuse, this job sleeps until it burns out, then merges (or shames).
   snapgit-wait:

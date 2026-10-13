@@ -26,6 +26,9 @@ inputs:
   ci-grace-seconds:
     description: After a push, how long "no checks yet" is read as "CI has not started" rather than "there is no CI".
     default: '30'
+  opt-in:
+    description: "'all' (default) puts every new PR on the clock. 'label' only touches PRs carrying the label snapgit, which is the safe way to pilot it."
+    default: all
   metrics-branch:
     description: "Branch that holds outcomes.json for the metrics dashboard. Use 'none' to turn metrics off."
     default: snapgit-metrics

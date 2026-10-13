@@ -9,9 +9,11 @@ const res = () => { const r = { headers: {}, setHeader(k, v) { r.headers[k] = v;
 
 test('status says whether sign-in is configured, never the secret', () => {
   const r = res(); auth.status(req('/api/auth/status'), r, ENV);
-  assert.equal(r.body, '{"enabled":true}');
+  assert.equal(r.body, '{"enabled":true,"installUrl":null}');
+  const r3 = res(); auth.status(req('/api/auth/status'), r3, { ...ENV, GITHUB_APP_SLUG: 'snapgit-x' });
+  assert.equal(JSON.parse(r3.body).installUrl, 'https://github.com/apps/snapgit-x/installations/new');
   const r2 = res(); auth.status(req('/api/auth/status'), r2, {});
-  assert.equal(r2.body, '{"enabled":false}');
+  assert.equal(r2.body, '{"enabled":false,"installUrl":null}');
 });
 
 test('login redirects to GitHub with a fresh state, sets an HttpOnly cookie, and refuses an unconfigured host', () => {
@@ -65,4 +67,14 @@ test('callback rejects a wrong or missing state (CSRF), GitHub errors, and netwo
   r = await run((s) => `code=abc&state=${s}`, undefined, async () => { throw new Error('offline'); });
   assert.match(decodeURIComponent(r.headers.Location), /could not reach GitHub/);
   assert.ok(![r].some((x) => x.headers.Location.includes('gh_token')));
+});
+
+test('rate limit: the 31st login from one address in a minute is refused, another address is not', () => {
+  const from = (ip) => ({ url: '/api/auth/login', headers: { host: 'snap.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': ip } });
+  let last;
+  for (let i = 0; i < 31; i++) { last = res(); auth.login(from('203.0.113.9'), last, ENV); }
+  assert.equal(last.statusCode, 429);
+  assert.equal(last.headers['Retry-After'], '60');
+  const other = res(); auth.login(from('203.0.113.10'), other, ENV);
+  assert.equal(other.statusCode, 302);
 });
