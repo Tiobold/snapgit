@@ -42,7 +42,7 @@ come from each machine, so a badly skewed clock shifts the fuse.
 
 ## Metrics page
 
-`metrics.html` reads `outcomes.json` from the `snapgit-metrics` branch plus recent closed PRs (as the baseline) straight from the GitHub API in the browser; `?demo` shows labelled synthetic data and `?repo=owner/name` prefills the form.
+`metrics.html` reads `outcomes.json` from the `snapgit-metrics` branch plus recent closed PRs (as the baseline) straight from the GitHub API in the browser; `?demo` shows labelled synthetic data and `?repo=owner/name` (and `?demo` opens the review demo, `/metrics?demo` the dashboard demo) prefills the form.
 
 ## Test
 

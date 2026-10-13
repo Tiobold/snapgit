@@ -332,6 +332,14 @@ await test('create-app: manifest is minimal, state is checked, a code becomes cr
   assert.deepEqual(errors, []);
 });
 
+await test('?demo opens the demo PR directly', async () => {
+  const { page, errors } = await newPage();
+  await page.goto(`${base}/?demo`);
+  await page.waitForSelector('#pr:not([hidden])');
+  assert.match(await page.locator('#status').innerText(), /Unopened/);
+  assert.deepEqual(errors, []);
+});
+
 await browser.close(); server.close();
 for (const [s, name, e] of results) console.log(s === 'ok' ? '✔' : '✘', name, e ? `\n   ${e.message}` : '');
 process.exit(results.some((r) => r[0] === 'FAIL') ? 1 : 0);

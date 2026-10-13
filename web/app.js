@@ -146,4 +146,5 @@ $('reject-form').addEventListener('submit', reject);
 const params = new URLSearchParams(location.search);
 if (params.get('repo')) $('repo').value = params.get('repo');
 if (params.get('pr')) $('pr-id').value = params.get('pr');
+if (params.get('demo') !== null) $('demo').click();
 initSignIn({ button: $('signin'), tokenInput: $('token'), onError: fail, returnPath: '/' });
