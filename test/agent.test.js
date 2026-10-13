@@ -73,3 +73,20 @@ test('pr send --json reports CI shame as ok:false with exit 1', () => {
   assert.equal(o.shamed.check, 'tests');
   assert.equal(o.shamed.exitCode, 3);
 });
+
+test('-m turns a literal \\n into a real line break, and a shamed --json says when the branch is still checked out', () => {
+  const dir = featureRepo();
+  const sent = J(snap(dir, ['pr', 'send', '--json', '-m', 'Title\\nWhy it matters']));
+  const rec = JSON.parse(git(dir, 'cat-file', 'blob', git(dir, 'rev-parse', `refs/snapgit/pr/${sent.id}`)));
+  assert.equal(rec.title, 'Title');
+  assert.match(rec.message, /Why it matters/);
+  const d2 = featureRepo();
+  git(d2, 'switch', '-q', 'main');
+  writeFileSync(join(d2, 'snapgit.json'), JSON.stringify({ checks: [{ name: 'tests', run: 'node -e "process.exit(3)"' }] }));
+  git(d2, 'add', '.'); git(d2, 'commit', '-qm', 'rules');
+  git(d2, 'switch', '-q', 'feat'); git(d2, 'rebase', '-q', 'main');
+  const r = snap(d2, ['pr', 'send', '--json']);
+  const o = JSON.parse(r.stdout);
+  assert.equal(o.shamed.branchDeleted, false);
+  assert.match(o.shamed.note, /checked out.*git switch main/);
+});

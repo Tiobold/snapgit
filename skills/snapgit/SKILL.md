@@ -12,8 +12,9 @@ Know the rules before you touch a branch, because the tool enforces them without
 
 1. **Branches have a timer.** Make them with `snapgit snap <branch> [--ttl 24h]`. The timer cannot be extended. When it runs
    out the branch is deleted (a copy is kept: `snapgit graveyard`, `snapgit resurrect <branch>` brings it back with a fresh timer).
-   Do not try to extend, reset or work around a timer. Finish and send, or let it go.
-2. **Send, do not merge.** Open a PR with `snapgit pr send -m "title\nwhy" -r origin --json`. CI runs first. If CI fails the
+   Do not try to extend, reset or work around a timer. Finish and send, or let it go. If asked to extend one, say it cannot be
+   done, send the work as a PR now (the PR carries its own lifetime), and mention `snapgit resurrect` if the branch is already gone.
+2. **Send, do not merge.** Open a PR with `snapgit pr send -m "title\nwhy" --json`, adding `-r origin` only when the repository has a remote (`git remote`). Write `\n` for the line break; snapgit turns it into a real newline. CI runs first. If CI fails the
    PR is not sent, your branch self-destructs, and you are shamed (and flagged as an agent). Run the project's own tests
    before sending so this never happens.
 3. **A reviewer opens it, then a fuse burns.** The fuse is sized to the change (10s + 0.5s per changed line, so small PRs are
@@ -32,14 +33,14 @@ snapgit status --json                    # what is on the clock, what is live, i
 snapgit snap feat/short-name --ttl 4h    # start work (timer cannot be extended)
 # ... commit small, test locally ...
 snapgit pr checks <id>                   # (after sending locally) preview CI on the would-be merge
-snapgit pr send -m "Title\nWhy this change" -r origin --json
+snapgit pr send -m "Title\nWhy this change" --json   # add -r origin if the repo has a remote
 snapgit pr ls --json                     # id, opened?, who opened it, when it merges
 snapgit pr burn <id>                     # withdraw your own PR if you spot a mistake
 snapgit undo <id> --push -r origin       # revert something snapgit merged (a revert commit)
 ```
 
 Use `--json` whenever you parse output. `snapgit pr send --json` returns `{ok, id, lines, fuseMs, expiresAt, ...}`; on a CI
-failure it returns `{ok:false, shamed:{...}}` and exits 1, so read the message and fix the cause on a new branch.
+failure it returns `{ok:false, shamed:{...}}` and exits 1: read `message` and `output`, then `git switch` back to the base branch (a checked-out branch only vanishes once you leave it, and `shamed.branchDeleted` says whether it already has) and fix the cause on a new branch.
 
 ## Good behavior
 

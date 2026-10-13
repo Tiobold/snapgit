@@ -17,7 +17,7 @@ const AGENTS_BLOCK = `${BEGIN}
 
 This repository uses snapgit. Branches have timers that cannot be extended, pull requests have one button (reject), and a
 PR nobody rejects merges. Run \`snapgit skill\` for the full rules, \`snapgit status --json\` for the current state, and send
-work with \`snapgit pr send -m "title\\nwhy" -r origin --json\`. Run the project's tests before sending: failing CI deletes the branch.
+work with \`snapgit pr send -m "title\\nwhy" --json\` (add \`-r origin\` if there is a remote). Run the project's tests before sending: failing CI deletes the branch.
 ${END}
 `;
 

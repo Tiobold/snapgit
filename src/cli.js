@@ -347,12 +347,13 @@ const COMMANDS = {
       const { values, positionals } = args(rest, { ...remoteOpt, ...TTL, base: { type: 'string', short: 'b' }, message: { type: 'string', short: 'm' }, json: { type: 'boolean' } });
       const remote = values.remote;
       if (remote && !hasRemote(remote, cwd)) throw new Error(`no remote named ${remote}`);
-      const sent = createPr({ cwd, head: positionals[0], base: values.base, message: values.message, ttlMs: values.ttl ? parseDuration(values.ttl) : undefined, remote });
+      const sent = createPr({ cwd, head: positionals[0], base: values.base, message: values.message?.replace(/\\n/g, '\n'), ttlMs: values.ttl ? parseDuration(values.ttl) : undefined, remote });
       if (values.json) {
         if (sent.shame) {
           const r = sent.shame;
           sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) });
-          out(JSON.stringify({ ok: false, shamed: { head: r.head, check: r.check, exitCode: r.exitCode ?? null, timedOut: !!r.timedOut, message: r.message, output: r.output ?? '' } }, null, 2));
+          const branchDeleted = !run(['rev-parse', '--verify', '-q', `refs/heads/${r.head}`], { cwd }).ok;
+          out(JSON.stringify({ ok: false, shamed: { head: r.head, check: r.check, exitCode: r.exitCode ?? null, timedOut: !!r.timedOut, message: r.message, output: r.output ?? '', branchDeleted, ...(branchDeleted ? {} : { note: `${r.head} is checked out, so it vanishes once you switch to another branch (git switch ${defaultBranch(cwd)}). Fix the cause on a new branch.` }) } }, null, 2));
           return 1;
         }
         const p = sent.pr;
