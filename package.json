@@ -36,6 +36,7 @@
   "files": [
     "bin",
     "src",
+    "web/lib",
     "action",
     "action.yml",
     "README.md",

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>snapgit metrics: how review is going</title>
+  <meta name="description" content="Time to merge, where the time goes, how many PRs nobody opened, and how AI-written PRs fare. By team, never by person.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="metrics.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" href="./">👻 snapgit</a>
+    <h1>How review is going</h1>
+    <p class="sub">Time to merge, where the time goes, and how many PRs nobody opened. Grouped by team and by agent-or-human, <strong>never by person</strong>.</p>
+  </header>
+
+  <main>
+    <form id="filters" class="filters" aria-label="Filters" autocomplete="off">
+      <label class="field">Repository <input id="repo" placeholder="owner/repo" spellcheck="false"></label>
+      <label class="field">Token <small>(optional)</small> <input id="token" type="password" placeholder="raises rate limits; needed for private repos" autocomplete="off"></label>
+      <button class="btn primary" type="submit">Load</button>
+      <button class="btn" type="button" id="demo">Demo data</button>
+      <span class="sep" aria-hidden="true"></span>
+      <fieldset class="presets">
+        <legend class="sr">Date range</legend>
+        <label><input type="radio" name="range" value="7"><span>7 days</span></label>
+        <label><input type="radio" name="range" value="30" checked><span>30 days</span></label>
+        <label><input type="radio" name="range" value="90"><span>90 days</span></label>
+        <label><input type="radio" name="range" value="3650"><span>All</span></label>
+      </fieldset>
+      <label class="field">Author <select id="population"><option value="all">All PRs</option><option value="human">Human-authored</option><option value="agent">Agent-authored</option></select></label>
+      <label class="field">Team <select id="team"><option value="">All teams</option></select></label>
+      <label class="field">Compare with <select id="baseline"><option value="before">PRs before snapgit</option><option value="same">PRs that skipped snapgit</option></select></label>
+    </form>
+    <p id="error" class="error" role="alert" hidden></p>
+    <p id="notes" class="notes" hidden></p>
+    <p id="demo-banner" class="demo" hidden><strong>Synthetic demo data.</strong> These numbers are generated to show what the dashboard looks like. They describe no real team.</p>
+
+    <section id="board" class="board" aria-live="polite" hidden>
+      <div class="hero-row">
+        <div class="hero">
+          <div class="hero-label">Median time to merge</div>
+          <div class="hero-value" id="hero-value">n/a</div>
+          <div class="hero-delta" id="hero-delta"></div>
+        </div>
+        <div class="tiles" id="tiles"></div>
+      </div>
+
+      <section class="card" id="insights-card"><h2>What this says</h2><ul id="insights" class="insights"></ul></section>
+
+      <section class="card" id="chart-stages"></section>
+      <section class="card" id="chart-percentiles"></section>
+      <section class="card" id="chart-weekly"></section>
+
+      <section class="card" id="table-population"></section>
+      <section class="card" id="table-teams"></section>
+
+      <section class="card defs">
+        <h2>How to read this</h2>
+        <ul>
+          <li><strong>Time to merge</strong> counts merged PRs only, from opened to merged. PRs that expired or failed CI are not in it, which is why the expired share sits beside it.</li>
+          <li><strong>Stages</strong>: waiting for CI, then waiting for a reviewer to open it, then the fuse (the window to reject). The comparison bar has no stages because ordinary PRs do not record them.</li>
+          <li><strong>Expired unopened</strong> means nobody looked before the PR's lifetime ended, so it was deleted: the review queue, made visible.</li>
+          <li><strong>Groups under 3 PRs are hidden</strong> so no one can be singled out. There is no per-person view, on purpose.</li>
+          <li>The baseline is a comparison, not proof: teams, seasons and PR sizes differ. Small samples (under about 30 PRs) are hints.</li>
+        </ul>
+        <div class="row">
+          <button class="btn" type="button" id="csv-agg">Download aggregates (CSV)</button>
+          <button class="btn" type="button" id="csv-rec">Download anonymous PR rows (CSV)</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="empty" class="card empty">
+      <h2>Load a repository, or look at the demo</h2>
+      <p>Enter <code>owner/repo</code> and press Load. The dashboard reads <code>outcomes.json</code> from the repository's <code>snapgit-metrics</code> branch (written by the snapgit Action, or published by <code>snapgit metrics --publish</code>) and compares it with that repository's ordinary closed PRs. Everything is read in your browser, straight from the GitHub API.</p>
+    </section>
+  </main>
+
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+  <footer>snapgit · <a href="./">review a PR</a> · <a href="https://github.com/Tiobold/snapgit">github.com/Tiobold/snapgit</a></footer>
+  <script type="module" src="metrics.js"></script>
+</body>
+</html>

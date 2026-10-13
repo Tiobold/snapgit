@@ -30,6 +30,10 @@ only to `api.github.com`), which the browser test also runs under.
 Honest limits: the PR's patch sits readable in the repo's ref, so "hidden until opened" is a UI rule, not encryption. Clocks
 come from each machine, so a badly skewed clock shifts the fuse.
 
+## Metrics page
+
+`metrics.html` reads `outcomes.json` from the `snapgit-metrics` branch plus recent closed PRs (as the baseline) straight from the GitHub API in the browser; `?demo` shows labelled synthetic data and `?repo=owner/name` prefills the form.
+
 ## Test
 
 Unit tests for the page logic run with `npm test`. The browser test (`npm run test:e2e`, needs Playwright and

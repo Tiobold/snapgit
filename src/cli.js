@@ -10,6 +10,8 @@ import { graves, resurrect } from './graveyard.js';
 import { freeze, thaw, frozenReason } from './freeze.js';
 import { publishTimer, sweepRemoteTimers } from './timers.js';
 import { loadPolicy } from './policy.js';
+import { listOutcomes, publishOutcomes } from './outcomes.js';
+import { normalizeOutcome, summarize, insights, fmtDuration, pct, aggregatesCsv, recordsCsv } from '../web/lib/metrics.js';
 import { resolveReviewers, ident } from './authz.js';
 import { defaultBranch, currentBranch } from './git.js';
 import { readFileSync } from 'node:fs';
@@ -44,6 +46,11 @@ SAFETY
   snapgit shame [-r origin] [--json] [--clear]                who broke CI (their branches self-destructed)
   snapgit freeze [reason] [-r origin] / thaw [-r origin]      kill switch: nothing merges or disappears
   snapgit policy                                              the effective rules (snapgit.json on base)
+
+METRICS
+  snapgit metrics [-r origin] [--since 30d] [--population human|agent] [--team t] [--json|--csv|--records]
+                                                              how review is going: outcomes, time to merge, where it goes
+  snapgit metrics --publish -r origin                         publish outcomes.json (branch snapgit-metrics) for the web dashboard
 
 FOR FUN
   snapgit streak                                              your commit streak
@@ -168,6 +175,29 @@ const COMMANDS = {
     else if (!records.length) out('nobody has been shamed. Yet');
     else for (const r of records) { out(`😬 ${r.message}`); if (r.output) out(r.output.split('\n').map((l) => `   | ${l}`).join('\n')); }
     if (values.clear) out(`cleared ${clearShame({ cwd, remote })} record(s)`);
+  },
+
+  metrics(argv, cwd) {
+    const { values } = args(argv, {
+      remote: { type: 'string', short: 'r' }, since: { type: 'string' }, population: { type: 'string' }, team: { type: 'string' },
+      json: { type: 'boolean' }, csv: { type: 'boolean' }, records: { type: 'boolean' }, publish: { type: 'boolean' },
+    }, false);
+    const remote = values.remote ?? (hasRemote('origin', cwd) ? 'origin' : undefined);
+    const raw = listOutcomes({ cwd, remote });
+    if (values.publish) {
+      if (!remote) throw new Error('--publish needs a remote (-r origin)');
+      out(`📊 published ${publishOutcomes({ cwd, remote, outcomes: raw })} outcomes to ${remote}/snapgit-metrics (outcomes.json). Point the dashboard at this repository.`);
+      return;
+    }
+    const population = values.population ?? 'all';
+    if (!['all', 'human', 'agent'].includes(population)) throw new Error('--population is all, human or agent');
+    const windowMs = parseDuration(values.since ?? '30d');
+    const records = raw.map(normalizeOutcome).filter(Boolean);
+    const summary = summarize(records, { since: now() - windowMs, until: now(), population, team: values.team ?? null });
+    if (values.json) out(JSON.stringify(summary, null, 2));
+    else if (values.csv) process.stdout.write(aggregatesCsv(summary));
+    else if (values.records) process.stdout.write(recordsCsv(records.filter((r) => r.settledAt >= now() - windowMs)));
+    else printMetrics(summary, formatDuration(windowMs));
   },
 
   merged(argv, cwd) {
@@ -366,6 +396,23 @@ const COMMANDS = {
     throw new Error('usage: snapgit pr <send|open|reject|approve|ls|checks|receipts|burn>');
   },
 };
+
+function printMetrics(s, windowLabel) {
+  const st = s.stats;
+  out(`📊 snapgit metrics, last ${windowLabel}${s.population !== 'all' ? `, ${s.population}-authored only` : ''}${s.team ? `, team ${s.team}` : ''}: ${s.total} settled PR${s.total === 1 ? '' : 's'}`);
+  if (!s.total) return out('   nothing settled in this window yet. (Outcomes are recorded whenever snapgit settles a PR.)');
+  out(`   merged ${pct(st.mergeRate)}   rejected ${st.rejected}   expired unopened ${pct(st.expiredRate)}   failed CI ${pct(st.shameRate)}   undone ${pct(st.undoRate)} of merges`);
+  out(`   time to merge: median ${fmtDuration(st.p50)}   p75 ${fmtDuration(st.p75)}   p90 ${fmtDuration(st.p90)}`);
+  const b = s.breakdown;
+  if (b.n) out(`   where it goes (median of ${b.n} merged): CI ${fmtDuration(b.ci)}, waiting for a reviewer ${fmtDuration(b.reviewer)}, fuse ${fmtDuration(b.fuse)}`);
+  const line = (name, g) => out(g.suppressed ? `   ${name}: fewer than ${s.minGroup} PRs, not shown` : `   ${name}: ${g.n} PRs, merged ${pct(g.mergeRate)}, failed CI ${pct(g.shameRate)}, median ${fmtDuration(g.p50)}`);
+  if (s.population === 'all') { out('   by author kind'); line('  human', s.populations.human); line('  agent', s.populations.agent); }
+  if (s.teams.length) { out('   by team'); for (const t of s.teams) line(`  ${t.team}`, t); }
+  out('');
+  for (const i of insights(s)) out(`   ${i.tone === 'good' ? '✅' : i.tone === 'caution' ? '⚠️' : '•'} ${i.text}`);
+  out('');
+  out('   (No baseline here: the CLI only sees snapgit PRs. The web dashboard compares against ordinary GitHub PRs.)');
+}
 
 function sweepQuiet(cwd) {
   printSweep(sweep({ cwd, settle: () => settlePrs({ cwd, offline: true }) }), true, false);

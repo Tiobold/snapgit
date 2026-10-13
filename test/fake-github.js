@@ -2,6 +2,9 @@
 // The real client and engine run against it, so the REST calls are exercised too.
 import http from 'node:http';
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
+
+const shaOf = (text) => createHash('sha1').update(text).digest('hex');
 
 export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } = {}) {
   const [owner, name] = repo.split('/');
@@ -18,7 +21,7 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
     merges: [], // calls to the merge endpoint
     reverts: [],
     mergeBehavior: null, // set to { status, message } to make the merge endpoint fail
-    branchShas: new Map(),
+    branchShas: new Map(), trees: new Map(), commitTrees: new Map(),
     nextComment: 1, nextPr: 1, calls: [],
   };
 
@@ -129,7 +132,34 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
       }
       if (rest.startsWith('/contents/') && req.method === 'GET') {
         const text = db.contents.get(`${url.searchParams.get('ref')}:${rest.slice('/contents/'.length)}`);
-        return text === undefined ? send(404, { message: 'Not Found' }) : send(200, { encoding: 'base64', content: Buffer.from(text).toString('base64') });
+        return text === undefined ? send(404, { message: 'Not Found' }) : send(200, { encoding: 'base64', content: Buffer.from(text).toString('base64'), sha: shaOf(text) });
+      }
+      if (rest.startsWith('/contents/') && req.method === 'PUT') {
+        const key = `${body.branch}:${rest.slice('/contents/'.length)}`;
+        if (!db.branches.has(body.branch)) return send(404, { message: 'Branch not found' });
+        const existing = db.contents.get(key);
+        if (existing !== undefined && body.sha !== shaOf(existing)) return send(409, { message: `${rest.slice(10)} does not match ${shaOf(existing)}` });
+        if (existing === undefined && body.sha) return send(422, { message: 'sha was supplied but the file does not exist' });
+        db.putCount = (db.putCount ?? 0) + 1;
+        if (db.failAllPuts) return send(500, { message: 'metrics storage is down' });
+        if (db.failNextPut) { db.failNextPut = false; db.contents.set(key, existing ?? '[]'); return send(409, { message: 'conflict (simulated race)' }); }
+        db.contents.set(key, Buffer.from(body.content, 'base64').toString('utf8'));
+        return send(existing === undefined ? 201 : 200, { content: { sha: shaOf(db.contents.get(key)) } });
+      }
+      if (rest === '/git/blobs' && req.method === 'POST') {
+        const sha = shaOf(body.content);
+        db.blobs.set(sha, body.content);
+        return send(201, { sha });
+      }
+      if (rest === '/git/trees' && req.method === 'POST') {
+        const sha = shaOf(JSON.stringify(body.tree));
+        db.trees.set(sha, body.tree);
+        return send(201, { sha });
+      }
+      if (rest === '/git/commits' && req.method === 'POST') {
+        const sha = shaOf(`${body.tree}${body.message}${db.commitTrees.size}`);
+        db.commitTrees.set(sha, body.tree);
+        return send(201, { sha });
       }
       if ((m = rest.match(/^\/commits\/([^/]+)\/check-runs$/))) return send(200, { check_runs: page(db.checks.get(m[1])?.runs ?? [], url) });
       if ((m = rest.match(/^\/commits\/([^/]+)\/status$/))) return send(200, { statuses: page(db.checks.get(m[1])?.statuses ?? [], url) });
@@ -142,7 +172,15 @@ export function createFakeGitHub({ repo = 'acme/app', defaultBranch = 'main' } =
       }
       if ((m = rest.match(/^\/git\/ref\/heads\/(.+)$/))) return db.branches.has(m[1]) ? send(200, { ref: `refs/heads/${m[1]}`, object: { sha: db.branchShas.get(m[1]) ?? 'e'.repeat(40) } }) : send(404, { message: 'Not Found' });
       if (rest === '/git/refs' && req.method === 'POST') {
-        db.refs.set(body.ref.replace(/^refs\//, ''), body.sha);
+        const short = body.ref.replace(/^refs\//, '');
+        if (short.startsWith('heads/')) {
+          const branch = short.slice('heads/'.length);
+          if (db.branches.has(branch)) return send(422, { message: 'Reference already exists' });
+          db.branches.add(branch);
+          for (const entry of db.trees.get(db.commitTrees.get(body.sha)) ?? []) db.contents.set(`${branch}:${entry.path}`, db.blobs.get(entry.sha));
+          return send(201, { ref: body.ref });
+        }
+        db.refs.set(short, body.sha);
         return send(201, { ref: body.ref });
       }
       if ((m = rest.match(/^\/git\/refs\/heads\/(.+)$/)) && req.method === 'DELETE') {

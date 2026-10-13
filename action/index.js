@@ -22,6 +22,7 @@ export async function runAction(env = process.env, { fetchImpl, sleep = (ms) => 
     gh, now, log: out,
     ignoreChecks: input(env, 'ignore-checks', 'snapgit').split(',').map((s) => s.trim()).filter(Boolean),
     ciGraceMs: Number(input(env, 'ci-grace-seconds', '30')) * 1000,
+    metricsBranch: ['', 'none'].includes(input(env, 'metrics-branch', 'snapgit-metrics')) ? '' : input(env, 'metrics-branch', 'snapgit-metrics'),
   });
   const mode = input(env, 'mode', 'auto');
   const event = env.GITHUB_EVENT_NAME;

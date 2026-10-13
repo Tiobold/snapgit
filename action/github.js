@@ -63,6 +63,28 @@ export class GitHub {
     return this.#req('PUT', `/pulls/${n}/merge`, { merge_method: method, ...(title ? { commit_title: title } : {}), ...(sha ? { sha } : {}) });
   }
 
+  /** A file with its blob sha (needed to update it safely), or null. */
+  async getFileMeta(path, ref) {
+    try {
+      const f = await this.#req('GET', `/contents/${seg(path)}?ref=${encodeURIComponent(ref)}`);
+      return { text: Buffer.from(f.content ?? '', 'base64').toString('utf8'), sha: f.sha };
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  }
+  /** Create or update a file. With `sha` GitHub rejects the write (409) if someone else changed the file first. */
+  putFile(path, { message, text, branch, sha }) {
+    return this.#req('PUT', `/contents/${seg(path)}`, { message, content: Buffer.from(text, 'utf8').toString('base64'), branch, ...(sha ? { sha } : {}) });
+  }
+  /** A new branch holding one file and no history (an orphan), made with the git data API. */
+  async createOrphanBranch(branch, path, text, message) {
+    const blob = await this.#req('POST', '/git/blobs', { content: text, encoding: 'utf-8' });
+    const tree = await this.#req('POST', '/git/trees', { tree: [{ path, mode: '100644', type: 'blob', sha: blob.sha }] });
+    const commit = await this.#req('POST', '/git/commits', { message, tree: tree.sha, parents: [] });
+    return this.#req('POST', '/git/refs', { ref: `refs/heads/${branch}`, sha: commit.sha });
+  }
+
   /** Tip of a branch, or null. */
   async branchSha(name) {
     try { return (await this.#req('GET', `/git/ref/heads/${seg(name)}`)).object.sha; } catch (e) { if (e.status === 404) return null; throw e; }

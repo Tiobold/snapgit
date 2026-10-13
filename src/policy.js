@@ -12,11 +12,12 @@ import { run } from './git.js';
  *   "mergeMethod":    "merge" | "squash" | "rebase",    // GitHub Action only
  *   "ttlHours":       24,                               // GitHub Action only: PR lifetime
  *   "frozen":         false,                            // GitHub Action only: kill switch
- *   "requireChecks":  false                             // GitHub Action only: no checks at all is NOT validation
+ *   "requireChecks":  false,                            // GitHub Action only: no checks at all is NOT validation
+ *   "teams":          { "platform": ["@alice", "bob@x.io"] }  // metrics only: outcomes are grouped by team, never by person
  * }
  */
 export const DEFAULT_POLICY = Object.freeze({
-  checks: [], fuse: {}, reviewers: null, protectedPaths: [], mergeMethod: 'merge', ttlHours: 24, frozen: false, requireChecks: false,
+  checks: [], fuse: {}, reviewers: null, protectedPaths: [], mergeMethod: 'merge', ttlHours: 24, frozen: false, requireChecks: false, teams: {},
 });
 
 const bad = (label, msg) => { throw new Error(`snapgit.json on ${label}${/^(is|must) /.test(msg) ? ' ' : ': '}${msg}`); };
@@ -26,7 +27,7 @@ export function parsePolicy(text, label = 'base') {
   let cfg;
   try { cfg = JSON.parse(text); } catch { return bad(label, 'is not valid JSON'); }
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return bad(label, 'must be a JSON object');
-  const p = { ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [] };
+  const p = { ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [], teams: {} };
 
   if (cfg.checks !== undefined) {
     if (!Array.isArray(cfg.checks) || cfg.checks.some((c) => !c || typeof c.run !== 'string' || !c.run)) bad(label, '"checks" must be a list of { name, run }');
@@ -62,11 +63,15 @@ export function parsePolicy(text, label = 'base') {
   }
   if (cfg.frozen !== undefined) p.frozen = !!cfg.frozen;
   if (cfg.requireChecks !== undefined) p.requireChecks = !!cfg.requireChecks;
+  if (cfg.teams !== undefined) {
+    if (!cfg.teams || typeof cfg.teams !== 'object' || Array.isArray(cfg.teams) || !Object.values(cfg.teams).every(strings)) bad(label, '"teams" must map team names to lists of people');
+    p.teams = cfg.teams;
+  }
   return p;
 }
 
 /** Read the policy from a local branch. No file means defaults; a broken file throws, so callers hold instead of guessing. */
 export function loadPolicy(base, cwd) {
   const r = run(['show', `refs/heads/${base}:snapgit.json`], { cwd });
-  return r.ok ? parsePolicy(r.out, base) : { ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [] };
+  return r.ok ? parsePolicy(r.out, base) : { ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [], teams: {} };
 }

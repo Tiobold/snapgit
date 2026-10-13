@@ -65,7 +65,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 // Serve with the exact headers vercel.json will, so a CSP violation fails the run.
 const vercelHeaders = Object.fromEntries(JSON.parse(readFileSync('web/vercel.json', 'utf8')).headers[0].headers.map((h) => [h.key, h.value]));
 const server = http.createServer((req, res) => {
-  const path = req.url.split('?')[0]; const file = join(ROOT, path === '/' ? 'index.html' : path);
+  const path = req.url.split('?')[0]; const file = join(ROOT, path === '/' ? 'index.html' : extname(path) ? path : `${path}.html`);
   if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
   try { res.writeHead(200, { ...vercelHeaders, 'content-type': MIME[extname(file)] || 'application/octet-stream' }).end(readFileSync(file)); } catch { res.writeHead(404).end(); }
 }).listen(0);
@@ -194,6 +194,81 @@ await test('mobile layout has no horizontal scroll', async () => {
   await page.goto(base); await page.click('#demo'); await page.click('#open');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   assert.ok(overflow <= 0, `page overflows by ${overflow}px`);
+});
+
+// ---- metrics dashboard
+const H = 3_600_000, D = 24 * H; const NOW = Date.now();
+const outcome = (i, over) => ({ v: 1, id: `o${i}`, src: 'action', kind: 'merged', createdAt: NOW - 4 * D + i * H, validatedAt: NOW - 4 * D + i * H + 60_000, openedAt: NOW - 4 * D + i * H + 3 * H, settledAt: NOW - 4 * D + i * H + 3 * H + 60_000, lines: 20, fuseMs: 60_000, agent: false, team: 'alpha', undone: false, ...over });
+const outcomes = [...[1, 2, 3, 4, 5].map((i) => outcome(i, { agent: i > 3 })), outcome(6, { team: 'solo' }), outcome(7, { kind: 'shamed', openedAt: null })];
+const pulls = [1, 2, 3, 4].map((n) => ({ number: n, user: { type: 'User' }, created_at: new Date(NOW - 9 * D + n * H).toISOString(), merged_at: new Date(NOW - 7 * D + n * H).toISOString(), closed_at: new Date(NOW - 7 * D + n * H).toISOString(), labels: [] }));
+const metricsMock = (state) => async (route) => {
+  const url = new URL(route.request().url()); const p = url.pathname;
+  if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' } });
+  if (p === '/repos/o/r/contents/outcomes.json') return route.fulfill(state.noFile ? jsonRes(404, {}) : jsonRes(200, { content: Buffer.from(JSON.stringify(outcomes)).toString('base64'), encoding: 'base64' }));
+  if (p === '/repos/o/r/pulls') return route.fulfill(jsonRes(200, url.searchParams.get('page') === '1' ? pulls : []));
+  return route.fulfill(jsonRes(404, {}));
+};
+
+await test('metrics demo: renders, labelled synthetic, no CSP errors, tooltips and table twins work', async () => {
+  const { page, errors } = await newPage();
+  await page.goto(`${base}/metrics?demo`);
+  await page.waitForSelector('#board:not([hidden])');
+  assert.equal(await page.locator('#demo-banner').isVisible(), true);
+  assert.match(await page.locator('#demo-banner').innerText(), /Synthetic/);
+  assert.match(await page.locator('#hero-value').innerText(), /\d/);
+  await page.locator('#chart-weekly .m').first().focus();
+  assert.equal(await page.locator('.tip').isVisible(), true);
+  await page.locator('#chart-stages .twin').click();
+  assert.equal(await page.locator('#chart-stages table.data').isVisible(), true);
+  await page.locator('#chart-stages .twin').click();
+  assert.equal(await page.locator('#chart-stages table.data').isVisible(), false);
+  await page.selectOption('#population', 'agent');
+  assert.match(await page.locator('#tiles').innerText(), /Settled/);
+  assert.deepEqual(errors, []);
+});
+
+await test('metrics github: reads outcomes.json and baseline PRs, suppresses small groups, downloads anonymous CSV', async () => {
+  const { page, errors } = await newPage();
+  await page.route('https://api.github.com/**', metricsMock({}));
+  await page.goto(`${base}/metrics`);
+  await page.fill('#repo', 'https://github.com/o/r');
+  await page.click('#filters button[type=submit]');
+  await page.waitForSelector('#board:not([hidden])');
+  assert.equal(await page.locator('#demo-banner').isVisible(), false);
+  assert.match(await page.locator('#hero-delta').innerText(), /faster than PRs before snapgit/);
+  const teams = await page.locator('#table-teams').innerText();
+  assert.match(teams, /alpha/);
+  assert.doesNotMatch(teams, /solo\s+\d+\s+\d+%/, 'a team with fewer than 3 PRs shows no numbers');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#csv-rec')]);
+  const csv = readFileSync(await dl.path(), 'utf8');
+  assert.doesNotMatch(csv, /@|author|title|branch/i);
+  assert.deepEqual(errors, []);
+});
+
+await test('metrics github: missing outcomes file is a note, missing repo and bad input are friendly errors', async () => {
+  const { page } = await newPage();
+  await page.route('https://api.github.com/**', metricsMock({ noFile: true }));
+  await page.goto(`${base}/metrics?repo=o/r`);
+  await page.click('#filters button[type=submit]');
+  await page.waitForSelector('#notes:not([hidden])');
+  assert.match(await page.locator('#notes').innerText(), /No outcomes\.json/);
+  await page.fill('#repo', 'o/missing');
+  await page.click('#filters button[type=submit]');
+  await page.waitForSelector('#error:not([hidden])');
+  assert.match(await page.locator('#error').innerText(), /not found/);
+  await page.fill('#repo', 'nonsense');
+  await page.click('#filters button[type=submit]');
+  assert.match(await page.locator('#error').innerText(), /owner\/repo/);
+});
+
+await test('metrics: mobile in light and dark has no horizontal scroll', async () => {
+  for (const scheme of ['light', 'dark']) {
+    const ctx = await browser.newContext({ viewport: { width: 375, height: 800 }, colorScheme: scheme });
+    const page = await ctx.newPage();
+    await page.goto(`${base}/metrics?demo`);
+    await page.waitForSelector('#board:not([hidden])');
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth) <= 0, `${scheme} overflows`);
+  }
 });
 
 await browser.close(); server.close();

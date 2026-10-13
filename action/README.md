@@ -42,7 +42,7 @@ run, so a branch dies on time even if nobody's laptop is awake.
 ## Inputs
 
 `token` (defaults to `github.token`), `mode` (`auto`, `sweep`, `wait`), `pr` (for `wait`), `max-wait` (seconds a wait job may
-sleep, default 21000), `poll-seconds` (default 20), `ignore-checks` (name prefixes, default `snapgit`), `ci-grace-seconds` (default 30).
+sleep, default 21000), `metrics-branch` (default `snapgit-metrics`; `none` disables outcome recording), `poll-seconds` (default 20), `ignore-checks` (name prefixes, default `snapgit`), `ci-grace-seconds` (default 30).
 Outputs: `wait-pr`, `wait-until` (set when a fuse was lit, so a second job can wait on it).
 
 ## Honest limits

@@ -7,6 +7,7 @@ import { createFakeGitHub } from './fake-github.js';
 import { GitHub, GitHubError } from '../action/github.js';
 import { createEngine } from '../action/engine.js';
 import { runAction } from '../action/index.js';
+import { normalizeOutcome } from '../web/lib/metrics.js';
 
 const T0 = Date.UTC(2026, 0, 10, 12, 0, 0);
 let fake;
@@ -598,5 +599,109 @@ test('action: scheduled runs settle everything and sweep expired timers; reviews
   // A comment on a plain issue (not a PR) is ignored.
   const issueEvent = runEnv(f, 'issue_comment', { action: 'created', issue: { number: 99 }, comment: { body: '/snapgit open', user: { login: 'alice', type: 'User' }, author_association: 'MEMBER' } });
   assert.equal((await runAction(issueEvent.env, quiet)).waitFor, null);
+  await f.close();
+});
+
+// ---------------------------------------------------------------- metrics outcomes
+
+const outcomesOf = (f, branch = 'snapgit-metrics') => JSON.parse(f.db.contents.get(`${branch}:outcomes.json`) ?? '[]');
+
+test('metrics: every ending is written to snapgit-metrics, with timings, size, team and agent flag but no person', async () => {
+  const s = await scenario({
+    policy: { teams: { platform: ['@dev'] }, ...fuse1m },
+    pr: { head: 'feat-m', title: 'Secret project title', commits: [{ author: { login: 'dev' }, commit: { message: 'ai\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>', author: { name: 'Dev', email: 'dev@example.com' } } }] },
+  });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  s.clock.t = T0 + 60_000;
+  await s.engine.settleOne(s.n);
+  const [o] = outcomesOf(s.f);
+  assert.equal(o.id, `gh-${s.n}`);
+  assert.deepEqual([o.kind, o.src, o.team, o.agent, o.undone], ['merged', 'gh', 'platform', true, false]);
+  assert.deepEqual([o.createdAt, o.openedAt, o.settledAt, o.fuseMs, o.lines], [T0, T0, T0 + 60_000, 60_000, 10]);
+  assert.doesNotMatch(JSON.stringify(o), /dev|alice|Secret|feat-m/);
+  assert.ok(normalizeOutcome(o), 'the dashboard can read what the Action writes');
+  await s.close();
+});
+
+test('metrics: rejected, withdrawn, expired and shamed PRs each leave the right outcome; undo flips the flag', async () => {
+  const f = await createFakeGitHub();
+  const clock = { t: T0 };
+  const engine = createEngine({ gh: new GitHub({ token: 't', repo: f.repo, apiUrl: f.url }), now: () => clock.t, ciGraceMs: 0 });
+  f.setPolicy({ ttlHours: 1, reviewers: ['@alice'], ...fuse1m });
+  const mk = async (opts) => { const pr = f.addPull(opts); await engine.onPullRequest(pr, 'opened'); return pr; };
+
+  const rejected = await mk({ head: 'r' });
+  await engine.onComment(rejected.number, f.comment(rejected.number, 'alice', '/snapgit reject nope'));
+  const withdrawn = await mk({ head: 'w' });
+  await engine.onComment(withdrawn.number, f.comment(withdrawn.number, 'dev', '/snapgit reject never mind'));
+  const expired = await mk({ head: 'e' });
+  const shamedSha = 's'.repeat(40);
+  const shamed = await mk({ head: 'sh', sha: shamedSha });
+  f.setChecks(shamedSha, { runs: [{ name: 'tests', status: 'completed', conclusion: 'failure' }] });
+  await engine.settleOne(shamed.number);
+  clock.t = T0 + 3600_000;
+  await engine.settleOne(expired.number);
+
+  const kinds = Object.fromEntries(outcomesOf(f).map((o) => [o.id, o.kind]));
+  assert.deepEqual(kinds, { [`gh-${rejected.number}`]: 'rejected', [`gh-${withdrawn.number}`]: 'withdrawn', [`gh-${shamed.number}`]: 'shamed', [`gh-${expired.number}`]: 'expired' });
+
+  const merged = await mk({ head: 'm' });
+  await engine.onComment(merged.number, f.comment(merged.number, 'alice', '/snapgit open'));
+  clock.t += 60_000;
+  await engine.settleOne(merged.number);
+  await engine.onComment(merged.number, f.comment(merged.number, 'alice', '/snapgit undo'));
+  assert.equal(outcomesOf(f).find((o) => o.id === `gh-${merged.number}`).undone, true);
+  await f.close();
+});
+
+test('metrics: two jobs finishing at once do not lose an outcome (optimistic concurrency retries)', async () => {
+  const s = await scenario({ policy: fuse1m });
+  const second = s.f.addPull({ head: 'second' });
+  await s.engine.onPullRequest(second, 'opened');
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  await s.engine.onComment(second.number, s.f.comment(second.number, 'alice', '/snapgit open'));
+  s.clock.t = T0 + 60_000;
+  await s.engine.settleOne(s.n);
+  s.f.db.failNextPut = true; // the next write loses a race
+  await s.engine.settleOne(second.number);
+  assert.deepEqual(outcomesOf(s.f).map((o) => o.id).sort(), [`gh-${s.n}`, `gh-${second.number}`].sort());
+  await s.close();
+});
+
+test('metrics are a bystander: a broken metrics store never blocks a merge, and "none" turns them off', async () => {
+  const s = await scenario({ policy: fuse1m });
+  await s.engine.onComment(s.n, s.f.comment(s.n, 'alice', '/snapgit open'));
+  s.f.db.branches.add('snapgit-metrics');
+  s.f.db.failAllPuts = true;
+  s.clock.t = T0 + 60_000;
+  assert.equal(await s.engine.settleOne(s.n), 'done');
+  assert.equal(s.f.db.merges.length, 1);
+  await s.close();
+
+  const f = await createFakeGitHub();
+  const clock = { t: T0 };
+  const off = createEngine({ gh: new GitHub({ token: 't', repo: f.repo, apiUrl: f.url }), now: () => clock.t, ciGraceMs: 0, metricsBranch: '' });
+  f.setPolicy(fuse1m);
+  const pr = f.addPull();
+  await off.onPullRequest(pr, 'opened');
+  await off.onComment(pr.number, f.comment(pr.number, 'alice', '/snapgit open'));
+  clock.t += 60_000;
+  await off.settleOne(pr.number);
+  assert.ok(!f.db.branches.has('snapgit-metrics'));
+  await f.close();
+});
+
+test('metrics: the metrics-branch input names the branch, and "none" disables it', async () => {
+  const f = await createFakeGitHub();
+  f.setPolicy({ fuse: { baseSec: 1, secPerLine: 0, minSec: 1, maxSec: 1 } });
+  const pr = f.addPull({ head: 'x' });
+  const quiet = { out: () => {} };
+  const base = { 'INPUT_CI-GRACE-SECONDS': '0' };
+  await runAction({ ...runEnv(f, 'pull_request', { action: 'opened', pull_request: pr }).env, ...base }, quiet);
+  const c = f.comment(pr.number, 'alice', '/snapgit open');
+  await runAction({ ...runEnv(f, 'issue_comment', { action: 'created', issue: { number: pr.number, pull_request: {} }, comment: c }).env, ...base }, quiet);
+  await runAction({ ...runEnv(f, 'schedule', {}, { SNAPGIT_NOW: String(Date.now() + 5000), 'INPUT_METRICS-BRANCH': 'team-metrics' }).env, ...base }, quiet);
+  assert.equal(outcomesOf(f, 'team-metrics').length, 1);
+  assert.ok(!f.db.branches.has('snapgit-metrics'));
   await f.close();
 });

@@ -26,6 +26,9 @@ inputs:
   ci-grace-seconds:
     description: After a push, how long "no checks yet" is read as "CI has not started" rather than "there is no CI".
     default: '30'
+  metrics-branch:
+    description: "Branch that holds outcomes.json for the metrics dashboard. Use 'none' to turn metrics off."
+    default: snapgit-metrics
 outputs:
   wait-pr:
     description: Set when this run lit a fuse: the PR number a follow-up wait job should watch.

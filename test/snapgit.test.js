@@ -442,7 +442,8 @@ test('over a remote: the sender merges 60s after a recipient opens, and --remote
   const swept = snap(sender, ['sweep', '--remote', 'origin'], T0 + 61_000);
   assert.match(swept.stdout, new RegExp(`PR ${id}: nobody rejected it.*and was pushed`));
   assert.equal(sh(bare, 'git', ['cat-file', '-e', 'main:f.txt']).status, 0);
-  assert.equal(git(bare, 'ls-remote', '.', 'refs/snapgit/*'), '');
+  // only the anonymous outcome record outlives the PR
+  assert.equal(git(bare, 'ls-remote', '.', 'refs/snapgit/*').split('\n').filter((l) => l && !l.includes('refs/snapgit/outcome/')).join(''), '');
   assert.match(snap(alice, ['pr', 'open', id, '-r', 'origin', '--screenshot']).stderr, /gone/);
 });
 

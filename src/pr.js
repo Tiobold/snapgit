@@ -14,6 +14,7 @@ import { authorsOf, shameRecord } from './shame.js';
 import { emit } from './notify.js';
 import { publishTimer } from './timers.js';
 import { frozenReason } from './freeze.js';
+import { recordOutcome, markUndone } from './outcomes.js';
 
 const PR = 'refs/snapgit/pr/';
 const RECEIPT = 'refs/snapgit/receipt/';
@@ -130,6 +131,7 @@ export function createPr({ cwd, head, base, message, ttlMs, remote }) {
     git(['update-ref', SHAME_REF + record.id, putBlob(shame, cwd)], { cwd });
     if (remote) run(['push', '--force', remote, `${SHAME_REF + record.id}:${SHAME_REF + record.id}`], { cwd });
     const warnings = emit('shamed', { ...shame, text: `😬 ${shame.message}` }, cwd);
+    recordOutcome({ cwd, via: remote || null, rec: record, kind: 'shamed' });
     setExpiry(head, now(), cwd); // self-destruct: the next sweep deletes the branch
     return { pr: null, shame, warnings };
   }
@@ -211,6 +213,7 @@ export function burnPr(id, { cwd, remote }) {
     return false;
   }
   if (!sameIdentity(ident(cwd), rec.author)) throw new Error(`only the sender (${rec.author}) can withdraw PR ${id}`);
+  recordOutcome({ cwd, via, rec, kind: 'withdrawn', receipt: readRef(RECEIPT + id, cwd)?.data });
   burn(id, { cwd, via });
   return true;
 }
@@ -520,6 +523,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       const alive = remoteHas(via, PR + rec.id, cwd);
       if (alive === 'unreachable') { if (expiry <= now()) unreachable(); continue; }
       if (alive === 'absent') {
+        recordOutcome({ cwd, via: null, rec, kind: 'withdrawn' });
         burn(rec.id, { cwd, via: null });
         events.push({ action: 'withdrawn', id: rec.id, head: rec.head });
         emit('expired', { id: rec.id, head: rec.head, title: rec.title, text: `🗑️ PR ${rec.id} "${rec.title}" is gone from ${via} (withdrawn or deleted), so nothing will merge` }, cwd);
@@ -558,12 +562,14 @@ export function settlePrs({ cwd, push = false, offline = false }) {
     // A veto counts from a reviewer, or from the sender withdrawing their own PR.
     if (rejection && reviewers && !isReviewer(rejection.rejector, reviewers) && !sameIdentity(rejection.rejector, rec.author)) rejection = null;
     if (rejection && rejection.rejectedAt <= due) {
+      recordOutcome({ cwd, via, rec, kind: 'rejected', receipt });
       burn(rec.id, { cwd, via });
       events.push({ action: 'rejected', id: rec.id, head: rec.head, by: rejection.rejector, reason: rejection.reason });
       emit('rejected', { id: rec.id, head: rec.head, title: rec.title, by: rejection.rejector, reason: rejection.reason, text: `🚫 PR ${rec.id} "${rec.title}" rejected by ${rejection.rejector}${rejection.reason ? `: "${rejection.reason}"` : ''}` }, cwd);
       continue;
     }
     if (!receipt) {
+      recordOutcome({ cwd, via, rec, kind: 'expired' });
       burn(rec.id, { cwd, via });
       events.push({ action: 'expired', id: rec.id, head: rec.head });
       emit('expired', { id: rec.id, head: rec.head, title: rec.title, text: `💨 PR ${rec.id} "${rec.title}" expired unopened, so it was deleted. Nobody looked, so nothing merged` }, cwd);
@@ -579,6 +585,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       const shown = protectedNow.length ? protectedNow : rec.protectedFiles;
       if (!approved && expiry <= now()) {
         // Nobody vouched for a protected change before its branch expired: it dies with the branch.
+        recordOutcome({ cwd, via, rec, kind: 'expired', receipt });
         burn(rec.id, { cwd, via });
         events.push({ action: 'expired', id: rec.id, head: rec.head, reason: 'never approved' });
         emit('expired', { id: rec.id, head: rec.head, title: rec.title, text: `💨 PR ${rec.id} "${rec.title}" touches protected paths and was never approved, so it was deleted with its branch` }, cwd);
@@ -599,6 +606,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
       git(['update-ref', SHAME_REF + rec.id, putBlob(record, cwd)], { cwd });
       if (via) run(['push', '--force', via, `${SHAME_REF + rec.id}:${SHAME_REF + rec.id}`], { cwd });
       const warnings = emit('shamed', { ...record, text: `😬 ${record.message}` }, cwd);
+      recordOutcome({ cwd, via, rec, kind: 'shamed', receipt });
       burn(rec.id, { cwd, via });
       gone.add(rec.head);
       events.push({ action: 'shamed', id: rec.id, head: rec.head, record, warnings });
@@ -617,6 +625,7 @@ export function settlePrs({ cwd, push = false, offline = false }) {
         headSha: tip, mergedAt: now(), opener: receipt.opener,
       }, cwd)], { cwd });
     }
+    recordOutcome({ cwd, via, rec, kind: 'merged', receipt });
     burn(rec.id, { cwd, via });
     gone.add(rec.head);
     events.push({ action: 'merged', id: rec.id, head: rec.head, base: rec.base, late: !!rejection, pushed, viewed: true, checks: result.ran ?? 0 });
@@ -658,6 +667,7 @@ export function undoPr(id, { cwd, remote, push = false }) {
   if (failure) throw new Error(failure);
   git(['update-ref', MERGED + id, putBlob({ ...led, undoneAt: now(), revertCommit: revert }, cwd)], { cwd });
   const via = remote || null;
+  markUndone(id, { cwd, via });
   const pushed = push && via ? run(['push', via, base], { cwd }).ok : false;
   emit('undone', { id, base, title: led.title, text: `↩️ PR ${id} "${led.title}" was undone: ${base} has a revert commit on top` }, cwd);
   return { revert: revert.slice(0, 7), base, head: led.head, pushed };

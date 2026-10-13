@@ -12,6 +12,8 @@ import { matchesAny } from '../src/glob.js';
 import { isReviewer, parseCodeowners } from '../src/authz.js';
 import { AGENT, shameMessage } from '../src/shame.js';
 import { formatDuration } from '../src/time.js';
+import { matchesReviewer } from '../src/authz.js';
+import { appendOutcome, patchOutcome } from './metrics-store.js';
 
 export const MARK = '<!-- snapgit-state ';
 export const LABEL = { merged: 'snapgit:merged', rejected: 'snapgit:rejected', expired: 'snapgit:expired', shamed: 'snapgit:shamed' };
@@ -19,7 +21,7 @@ const identOf = (login) => `${login} <${login}@users.noreply.github.com>`;
 const iso = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
 const SAFE_BRANCHES = ['main', 'master', 'trunk', 'develop'];
 
-export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], ciGraceMs = 30_000, log = () => {} }) {
+export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snapgit'], ciGraceMs = 30_000, metricsBranch = 'snapgit-metrics', log = () => {} }) {
   const defaults = () => ({ ...DEFAULT_POLICY, fuse: {}, checks: [], protectedPaths: [] });
 
   async function policyFor(base) {
@@ -74,6 +76,20 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
 
   const say = (n, text) => gh.createComment(n, text);
 
+  /**
+   * Remember how a PR ended, for the dashboard: timings, size, team, agent flag. Never a person. A metrics
+   * failure is logged and swallowed: metrics are a bystander and must never block a merge.
+   */
+  async function record(pr, s, kind) {
+    if (!metricsBranch) return;
+    try {
+      await appendOutcome(gh, metricsBranch, {
+        v: 1, id: `gh-${pr.number}`, src: 'gh', kind, createdAt: s.createdAt, validatedAt: s.ciPassedAt ?? null, openedAt: s.openedAt ?? null,
+        settledAt: now(), lines: s.lines, fuseMs: s.fuseMs, agent: !!s.agent, team: s.team ?? null, undone: false,
+      });
+    } catch (e) { log(`metrics: ${e.message}`); }
+  }
+
   async function sizeUp(pr, policy) {
     const files = await gh.listFiles(pr.number);
     const sized = fuseFromFiles(files.map((f) => ({ path: f.filename, lines: (f.additions ?? 0) + (f.deletions ?? 0) })), policy.fuse);
@@ -88,8 +104,10 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     const existing = await load(pr.number);
     if (existing) return existing;
     const policy = await policyFor(pr.base.ref);
+    const team = Object.entries(policy.teams ?? {}).find(([, members]) => members.some((m) => matchesReviewer(identOf(pr.user.login), m)))?.[0] ?? null;
     const state = {
-      v: 1, headSha: pr.head.sha, author: pr.user.login, createdAt: now(),
+      v: 1, headSha: pr.head.sha, author: pr.user.login, createdAt: now(), headSeenAt: now(), team,
+      agent: (await authorsOf(pr.number)).some((a) => a.agent),
       expiresAt: now() + policy.ttlHours * 3600_000, ...(await sizeUp(pr, policy)),
     };
     await write(pr.number, null, state, pr);
@@ -160,6 +178,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     await write(n, loaded, { ...loaded.state, shamed: { check: failing.name, at: now() } }, pr);
     await gh.closePull(n);
     await gh.addLabel(n, LABEL.shamed);
+    await record(pr, loaded.state, 'shamed');
     await removeBranch(pr);
   }
 
@@ -198,6 +217,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     await write(pr.number, loaded, next, pr);
     await gh.closePull(pr.number);
     await gh.addLabel(pr.number, LABEL.rejected);
+    await record(pr, s, login === pr.user.login ? 'withdrawn' : 'rejected');
     return {};
   }
 
@@ -219,6 +239,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
     if (reviewers ? !isReviewer(identOf(login), reviewers) : !MEMBERS.has(assoc)) { await say(pr.number, `@${login} only reviewers can undo${reviewers ? ` (reviewers: ${reviewers.join(', ')})` : ' (repository members, or list reviewers in snapgit.json)'}.`); return {}; }
     const revert = await gh.revertPull(pr.node_id);
     await write(pr.number, loaded, { ...s, undone: { by: login, at: now(), number: revert.number } }, pr);
+    if (metricsBranch) await patchOutcome(gh, metricsBranch, `gh-${pr.number}`, { undone: true }).catch((e) => log(`metrics: ${e.message}`));
     await say(pr.number, `↩️ @${login} undid this: revert PR #${revert.number} (${revert.url}). It goes through snapgit like any other PR.`);
     return {};
   }
@@ -337,6 +358,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
       await say(n, `💨 ${why}`);
       await gh.closePull(n);
       await gh.addLabel(n, LABEL.expired);
+      await record(pr, s, 'expired');
       await removeBranch(pr);
       return 'done';
     }
@@ -355,6 +377,7 @@ export function createEngine({ gh, now = () => Date.now(), ignoreChecks = ['snap
       await write(n, loaded, next, pr);
       await say(n, `🔀 Nobody rejected it, so it merged${ci.state === 'success' ? ' (CI passed)' : ''}. Undo with \`/snapgit undo\`.`);
       await gh.addLabel(n, LABEL.merged);
+      await record(pr, s, 'merged');
       await removeBranch(pr);
       return 'done';
     } catch (e) {

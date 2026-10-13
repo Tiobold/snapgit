@@ -146,6 +146,23 @@ Most teams review in GitHub, so `action.yml` applies the same rules to ordinary 
 requests changes), CI is GitHub's own checks, and `/snapgit undo` opens a GitHub revert PR. Unopened PRs are closed and
 their branches deleted; shamed PRs too. See [action/README.md](action/README.md) for the workflow to paste in.
 
+## Metrics
+
+`snapgit metrics` (or the dashboard at `web/metrics.html`) answers: did review get faster, how many PRs did nobody open, how often do reviewers reject, and do agent-written PRs fail CI more than human ones.
+
+```
+snapgit metrics --since 30d              # table in the terminal
+snapgit metrics --json | --csv | --records
+snapgit metrics --publish                # push outcomes.json to the snapgit-metrics branch for the dashboard
+```
+
+Every settled PR leaves an outcome record under `refs/snapgit/outcome/` (the Action appends to `outcomes.json` on the
+`snapgit-metrics` branch; set `metrics-branch: none` to turn that off). Records hold timings, size and kind only: no
+author, title or branch. Groups are **teams** (`"teams": {"payments": ["ana", "bo"]}` in `snapgit.json`) and agent-or-human,
+never people; groups under 3 PRs are suppressed and CSV exports are anonymous. The baseline is the repository's ordinary
+closed PRs before the first snapgit PR (or those that skipped snapgit). It is a comparison, not proof: it only sees PRs that
+settled, so survivorship bias and team or season differences apply.
+
 ## Web
 
 `web/` is a static site (deploy on Vercel with root directory `web`): review a PR in a browser, with a size-based countdown,
