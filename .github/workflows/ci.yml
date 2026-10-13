@@ -12,7 +12,6 @@ jobs:
         node: [20, 22]
     runs-on: ${{ matrix.os }}
     # macOS and Windows have not been run yet: report them without failing the workflow until they are green.
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +21,6 @@ jobs:
       - run: npm test
   web:
     runs-on: ubuntu-latest
-    continue-on-error: true   # first run still to be seen
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
